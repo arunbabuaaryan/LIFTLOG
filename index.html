@@ -1,0 +1,2136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+  // Applied before first paint so a saved "light" preference doesn't flash dark first.
+  // No stored preference (or "dark") leaves the <html> element as-is, which is the
+  // default dark theme defined in :root below.
+  try {
+    if (localStorage.getItem('liftlog_theme') === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  } catch (e) {}
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LiftLog</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#111827">
+<!-- iOS only: Safari lets the home-screen icon and the launch/splash image differ.
+     Android/Chrome cannot split these — it always uses the manifest.json icons for both. -->
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="apple-touch-startup-image" href="icon-512-splash.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0b10;
+    --surface: #15171f;
+    --surface-raised: #1c1f29;
+    --border: rgba(255,255,255,0.07);
+    --border-strong: rgba(255,255,255,0.12);
+    --text: #f2f3f6;
+    --text-dim: #8b90a3;
+    --text-faint: #565b6c;
+    --accent: #5b7fff;
+    --success: #34d399;
+    --success-bg: #132a20;
+    --success-glow: rgba(52,211,153,.55);
+    --success-border: rgba(52,211,153,.4);
+    --danger: #f2555a;
+    --danger-bg: #2a1518;
+    --header-grad-a: #171922;
+    --header-grad-b: #121319;
+    --control-bg: #262a36;
+    --control-bg-active: #2d3240;
+    --done-bg: #2c5b41;
+    --card-shadow: 0 1px 2px rgba(0,0,0,.2), 0 4px 14px rgba(0,0,0,.18);
+    --streak-color: #ffa361;
+    --ring-track: #2a2d3a;
+    color-scheme: dark;
+  }
+  /* Light ("Normal") mode — opt-in via data-theme, dark stays the default look.
+     Clean white palette: true white throughout, elevation done via soft shadow/border
+     rather than background-color shifts, so it reads crisp rather than tinted. */
+  [data-theme="light"] {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-raised: #f6f6f8;
+    --border: rgba(20,20,25,0.09);
+    --border-strong: rgba(20,20,25,0.15);
+    --text: #1a1a1e;
+    --text-dim: #6b6b74;
+    --text-faint: #a3a3ac;
+    --accent: #2f3f75;
+    --success: #2f7a52;
+    --success-bg: #eef7f1;
+    --success-glow: rgba(47,122,82,.28);
+    --success-border: rgba(47,122,82,.4);
+    --danger: #b23b3b;
+    --danger-bg: #fbeeec;
+    --header-grad-a: #ffffff;
+    --header-grad-b: #fafafb;
+    --control-bg: #f6f6f8;
+    --control-bg-active: #ececef;
+    --done-bg: #2f7a52;
+    --card-shadow: 0 1px 2px rgba(20,20,25,.04), 0 8px 20px rgba(20,20,25,.06);
+    --streak-color: #a8712e;
+    --ring-track: #ececef;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); padding-bottom: 92px;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 18px 16px 15px; background: linear-gradient(180deg, var(--header-grad-a) 0%, var(--header-grad-b) 100%);
+    position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--border);
+  }
+  header::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+    background: linear-gradient(90deg, #4f7cff, #ff6b4a, #3ecf6e, #b06bff, #ffcb4a);
+    opacity: .75;
+  }
+  header h1 {
+    margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.02em;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px;
+  }
+  #streakBadge { font-size: 12.5px; color: var(--streak-color); font-weight: 600; letter-spacing: -0.01em; }
+  .gearbtn {
+    float: right; background: var(--surface-raised); color: var(--text); border: 1px solid var(--border);
+    border-radius: 9px; width: 34px; height: 34px; font-size: 15px; transition: transform .12s ease, background .15s ease;
+  }
+  .gearbtn:active { transform: scale(.92); background: var(--control-bg); }
+  .ring {
+    width: 20px; height: 20px; border-radius: 50%; margin-left: 6px;
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  }
+  .ring-inner { width: 12px; height: 12px; border-radius: 50%; background: var(--surface-raised); font-size: 8px; display: flex; align-items: center; justify-content: center; color: var(--success); font-weight: 900; }
+  .tabs { display: flex; gap: 7px; padding: 12px; overflow-x: auto; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .tab {
+    flex: 0 0 auto; padding: 9px 15px; border-radius: 22px; background: var(--surface-raised);
+    color: var(--text-dim); font-size: 13px; font-weight: 600; white-space: nowrap; letter-spacing: -0.01em;
+    display: flex; align-items: center; border: 1px solid var(--border);
+    transition: background .25s ease, color .25s ease, border-color .25s ease;
+  }
+  .tab.active { background: var(--accent); color: #fff; border-color: transparent; }
+  @keyframes levelUpPulse {
+    0% { box-shadow: 0 0 0 0 var(--success-glow); }
+    70% { box-shadow: 0 0 0 16px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+  }
+  .card.done-today { background: var(--success-bg); border-color: var(--success-border); border-width: 1.5px; }
+  .card.done-today h3 { color: var(--success); }
+  .card.levelup { animation: levelUpPulse 1s ease-out; }
+  .complete-banner {
+    text-align: center; font-size: 15.5px; font-weight: 700; color: var(--success); letter-spacing: -0.01em;
+    background: var(--success-bg); border: 1px solid var(--success-border);
+  }
+  @keyframes fadeSlide {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .card { animation: fadeSlide .3s cubic-bezier(.2,.7,.3,1); }
+  .setbox.changed { border-color: var(--accent); }
+  .nav {
+    position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--surface);
+    border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .navbtn {
+    flex: 1; padding: 13px 0 11px; text-align: center; font-size: 11.5px; font-weight: 600;
+    color: var(--text-faint); position: relative; transition: color .2s ease; letter-spacing: -0.01em;
+  }
+  .navbtn.active { color: var(--accent); }
+  .navbtn.active::before {
+    content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 28px; height: 2.5px; border-radius: 0 0 3px 3px; background: var(--accent);
+  }
+  main { padding: 16px; }
+  .card {
+    background: var(--surface); border-radius: 16px; padding: 16px; margin-bottom: 12px;
+    border: 1px solid var(--border); box-shadow: var(--card-shadow);
+  }
+  .card h3 { margin: 0 0 6px 0; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
+  .meta { font-size: 12.5px; color: var(--text-dim); margin-bottom: 10px; }
+  .livectrl { display: flex; align-items: center; gap: 6px; }
+  .livectrl-label { font-size: 11px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
+  .livectrl-val { font-size: 14px; font-weight: 700; min-width: 44px; text-align: center; color: var(--text); }
+  .sets { display: flex; gap: 8px; flex-wrap: wrap; }
+  .setbox {
+    min-width: 148px; height: 52px; border-radius: 13px; background: var(--surface-raised);
+    display: flex; align-items: center; justify-content: space-between; padding: 0 4px;
+    border: 1.5px solid var(--border-strong); gap: 2px; transition: border-color .25s ease, background .25s ease;
+  }
+  .setbox.done { background: var(--success-bg); border-color: var(--success-border); }
+  .stepbtn {
+    width: 34px; height: 42px; border-radius: 9px; background: var(--control-bg); color: var(--text);
+    border: none; font-size: 19px; line-height: 1; flex: 0 0 auto; font-weight: 500;
+    transition: transform .1s ease, background .15s ease;
+  }
+  .stepbtn:active { transform: scale(.9); background: var(--control-bg-active); }
+  .setval {
+    flex: 1; text-align: center; font-size: 18px; font-weight: 700; color: var(--text);
+    min-width: 26px; letter-spacing: -0.01em;
+  }
+  .donebtn {
+    height: 42px; padding: 0 11px; border-radius: 9px; background: var(--done-bg); color: #fff;
+    border: none; font-size: 12.5px; font-weight: 700; flex: 0 0 auto; letter-spacing: -0.01em;
+    transition: transform .1s ease, background .15s ease;
+  }
+  .donebtn:active { transform: scale(.93); }
+  .setbox.done .donebtn { background: var(--success); color: #06120c; }
+  input, select {
+    padding: 10px; border-radius: 8px; background: var(--surface-raised);
+    border: 1px solid var(--border-strong); color: var(--text); font-size: 14px; font-family: inherit;
+  }
+  .btn {
+    padding: 10px 16px; border-radius: 11px; background: var(--accent); color: #fff; border: none;
+    font-size: 13.5px; font-weight: 700; letter-spacing: -0.01em;
+    transition: transform .1s ease, filter .15s ease;
+  }
+  .btn:active { transform: scale(.96); filter: brightness(.92); }
+  .btn.secondary { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border-strong); }
+  .btn.small { padding: 7px 11px; font-size: 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .timer-fab {
+    position: fixed; right: 16px; bottom: 100px; width: 92px; height: 92px; border-radius: 46px;
+    background: linear-gradient(155deg, #ff8058, #ff5f4a);
+    color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 25px; font-weight: 800; box-shadow: 0 8px 24px rgba(255,95,74,.4); z-index: 20;
+    border: 2.5px solid rgba(255,255,255,.25);
+  }
+  .timer-fab .fablabel { font-size: 10.5px; font-weight: 700; letter-spacing: 1.5px; opacity: .9; margin-bottom: 2px; }
+  @keyframes urgentPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.12); }
+  }
+  .timer-fab.urgent {
+    background: linear-gradient(155deg, #ff3b3b, #d81f1f);
+    animation: urgentPulse 0.5s ease-in-out infinite;
+    box-shadow: 0 8px 28px rgba(255,40,40,.65);
+  }
+  .badge {
+    font-size: 10.5px; font-weight: 700; letter-spacing: -0.01em; padding: 3px 9px;
+    border-radius: 10px; background: var(--surface-raised); color: var(--text-dim);
+  }
+  .badge.up { background: var(--success-bg); color: var(--success); }
+  .badge.deload { background: var(--danger-bg); color: var(--danger); }
+  .histitem { padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .histitem:last-child { border-bottom: none; }
+  #testModeBanner {
+    background: repeating-linear-gradient(45deg, #7a2e00, #7a2e00 10px, #8f3800 10px, #8f3800 20px);
+    color: #fff; text-align: center; font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
+    padding: 8px; position: sticky; top: 0; z-index: 9;
+  }
+  .empty { text-align: center; color: var(--text-faint); padding: 40px 10px; font-size: 13px; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; margin-top: 10px; width: 100%; }
+  .cal-dow { text-align: center; font-size: 10.5px; font-weight: 600; color: var(--text-faint); padding-bottom: 4px; min-width: 0; }
+  .cal-cell {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    border-radius: 9px; background: var(--surface-raised); font-size: 12px; color: var(--text-dim); min-width: 0;
+  }
+  .cal-cell.empty { background: transparent; }
+  .cal-cell.worked { background: var(--success-bg); color: var(--success); font-weight: 700; }
+  .cal-cell.today { border: 2px solid var(--accent); }
+  select {
+    background: var(--surface-raised); color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: 9px; padding: 7px 8px; font-size: 13px;
+  }
+  canvas { max-height: 220px; }
+</style>
+</head>
+<body>
+
+<header><h1>LiftLog <span id="streakBadge"></span> <button class="gearbtn" onclick="setView('manage')">⚙</button></h1></header>
+<div id="testModeBanner" style="display:none;"></div>
+
+<div id="app"></div>
+
+<div class="nav">
+  <div class="navbtn active" data-view="workout" onclick="setView('workout')">🏋️ Workout</div>
+  <div class="navbtn" data-view="progress" onclick="setView('progress')">📈 Progress</div>
+  <div class="navbtn" data-view="history" onclick="setView('history')">🗒️ History</div>
+</div>
+
+<div class="timer-fab" id="timerFab" style="display:none;" onclick="skipTimer()"></div>
+
+<script>
+// ---------- DATA ----------
+const DAY_PALETTE = ['#4f7cff', '#ff6b4a', '#3ecf6e', '#b06bff', '#ffcb4a', '#ff5c93', '#5ce1e6', '#f2a65a'];
+
+const WEIGHTS = [11, 22, 33, 44, 55]; // lb per dumbbell
+const BELT_INCREMENT = 5; // lb, weighted pull-up/chin-up belt, open-ended
+
+const DEFAULT_DAYS = [
+  { id:'shoulders', label:'Shoulders', icon:'💪', color:'#4f7cff', exercises:[
+    {id:'db_press', name:'DB Shoulder Press', mode:'weighted', sets:5, repLow:5, repHigh:8, rest:120},
+    {id:'lat_raise', name:'Lateral Raise (side delt priority)', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:60},
+    {id:'lat_raise_2', name:'Bent-Over Lateral Raise', mode:'weighted', sets:2, repLow:10, repHigh:15, rest:60},
+    {id:'rear_delt', name:'Rear Delt Fly', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:60},
+    {id:'shrug', name:'DB Shrug', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:60},
+  ]},
+  { id:'chest', label:'Chest', icon:'🎽', color:'#ff6b4a', exercises:[
+    {id:'db_bench', name:'DB Bench Press', mode:'weighted', sets:5, repLow:5, repHigh:8, rest:150},
+    {id:'incline_press', name:'Incline DB Press', mode:'weighted', sets:4, repLow:6, repHigh:10, rest:120},
+    {id:'flyes', name:'DB Flyes', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:60},
+    {id:'close_grip', name:'Close-Grip Press', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:90},
+    {id:'pullover', name:'DB Pullover', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:60},
+  ]},
+  { id:'back', label:'Back', icon:'🔺', color:'#3ecf6e', exercises:[
+    {id:'pullups', name:'Wide-Grip Pull-ups (width priority)', mode:'weighted_bw', sets:6, repLow:5, repHigh:10, rest:150},
+    {id:'db_row', name:'DB Row', mode:'weighted', sets:5, repLow:6, repHigh:10, rest:90},
+    {id:'chinups', name:'Chin-ups', mode:'weighted_bw', sets:3, repLow:5, repHigh:10, rest:120},
+    {id:'reverse_fly', name:'Reverse Flyes', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:60},
+    {id:'db_deadlift', name:'DB Deadlift', mode:'weighted', sets:5, repLow:5, repHigh:8, rest:150},
+  ]},
+  { id:'legs', label:'Legs', icon:'🦵', color:'#b06bff', exercises:[
+    {id:'goblet_squat', name:'DB Goblet Squat', mode:'weighted', sets:5, repLow:5, repHigh:10, rest:150},
+    {id:'sumo_squat', name:'DB Sumo Squat (width priority)', mode:'weighted', sets:3, repLow:8, repHigh:12, rest:120},
+    {id:'lunges', name:'DB Lunges', mode:'weighted', sets:4, repLow:8, repHigh:12, rest:90},
+    {id:'rdl', name:'DB Romanian Deadlift', mode:'weighted', sets:4, repLow:6, repHigh:10, rest:120},
+    {id:'calf_raise', name:'Calf Raises (priority)', mode:'weighted', sets:5, repLow:10, repHigh:15, rest:45},
+    {id:'calf_raise_single', name:'Single-Leg Calf Raise', mode:'bodyweight', sets:2, startReps:12, rest:45},
+  ]},
+  { id:'abs', label:'Abs', icon:'🔥', color:'#ffcb4a', exercises:[
+    {id:'weighted_crunch', name:'Weighted Crunch', mode:'weighted', sets:4, repLow:10, repHigh:15, rest:45},
+    {id:'russian_twist', name:'Russian Twists', mode:'weighted', sets:3, repLow:12, repHigh:20, rest:45},
+    {id:'leg_raise', name:'Leg Raises', mode:'bodyweight', sets:4, startReps:8, rest:45},
+    {id:'plank', name:'Plank', mode:'timed', sets:3, startSeconds:30, rest:45},
+    {id:'side_bend', name:'Side Bends', mode:'weighted', sets:3, repLow:12, repHigh:20, rest:45},
+  ]},
+];
+
+const DEFAULT_SETS_MIN = 3;
+const DEFAULT_SETS_MAX = 5;
+const DEFAULT_REP_LOW = 8;
+const DEFAULT_REP_HIGH = 12;
+const DEFAULT_REP_INCREMENT = 2;
+DEFAULT_DAYS.forEach(day => day.exercises.forEach(ex => {
+  if (ex.mode === 'weighted' || ex.mode === 'weighted_bw') {
+    ex.setsMin = DEFAULT_SETS_MIN;
+    ex.setsMax = DEFAULT_SETS_MAX;
+    ex.repLow = DEFAULT_REP_LOW;
+    ex.repHigh = DEFAULT_REP_HIGH;
+    ex._repDefaultApplied = true;
+  }
+}));
+
+// ---------- STORAGE ----------
+const STORE_KEY = 'liftlog_v1';
+const TEST_STORE_KEY = 'liftlog_v1_test';
+const TEST_MODE_FLAG = 'liftlog_test_mode_active';
+const THEME_KEY = 'liftlog_theme';
+
+function isTestMode() { return localStorage.getItem(TEST_MODE_FLAG) === '1'; }
+function activeStoreKey() { return isTestMode() ? TEST_STORE_KEY : STORE_KEY; }
+
+// ---------- APPEARANCE (dark default, light opt-in) ----------
+function getTheme() { return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'; }
+function applyTheme(t) {
+  if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) metaTheme.setAttribute('content', t === 'light' ? '#ffffff' : '#111827');
+}
+function setTheme(t) {
+  localStorage.setItem(THEME_KEY, t);
+  applyTheme(t);
+  render();
+}
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(activeStoreKey())) || { exercises:{}, history:[] }; }
+  catch(e){ return { exercises:{}, history:[] }; }
+}
+function saveState() { localStorage.setItem(activeStoreKey(), JSON.stringify(state)); }
+let state = loadState();
+
+function enableTestMode() {
+  if (isTestMode()) return;
+  if (!confirm('Enable Test Mode?\n\nThis switches to a separate copy of your data (starting from what you have now) so you can try anything — logging sets, editing exercises, resetting data — without touching your real progress. Exit anytime to go back.')) return;
+  if (!localStorage.getItem(TEST_STORE_KEY)) {
+    // First time entering test mode: seed it with a copy of real data, not a blank slate
+    localStorage.setItem(TEST_STORE_KEY, localStorage.getItem(STORE_KEY) || JSON.stringify({ exercises:{}, history:[], prs:[], meta:{}, sessionStarts:{} }));
+  }
+  localStorage.setItem(TEST_MODE_FLAG, '1');
+  location.reload();
+}
+
+function disableTestMode() {
+  if (!isTestMode()) return;
+  localStorage.setItem(TEST_MODE_FLAG, '0');
+  location.reload();
+}
+
+function resetTestData() {
+  if (!isTestMode()) return;
+  if (!confirm('Reset test data back to a fresh copy of your real data? Your current test progress will be lost.')) return;
+  localStorage.setItem(TEST_STORE_KEY, localStorage.getItem(STORE_KEY) || JSON.stringify({ exercises:{}, history:[], prs:[], meta:{}, sessionStarts:{} }));
+  location.reload();
+}
+
+let DAYS = state.customDays || JSON.parse(JSON.stringify(DEFAULT_DAYS));
+DAYS.forEach((d, i) => {
+  if (!d.icon) d.icon = (DEFAULT_DAYS.find(dd => dd.id === d.id) || {}).icon || '⭐';
+  if (!d.color) d.color = (DEFAULT_DAYS.find(dd => dd.id === d.id) || {}).color || DAY_PALETTE[i % DAY_PALETTE.length];
+  d.exercises.forEach(ex => {
+    if ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') && ex.setsMin == null && ex.setsMax == null) {
+      ex.setsMin = DEFAULT_SETS_MIN;
+      ex.setsMax = DEFAULT_SETS_MAX;
+      const live = state.exercises && state.exercises[ex.id];
+      if (live && live.sets != null) {
+        live.sets = Math.min(Math.max(live.sets, ex.setsMin), ex.setsMax);
+      }
+    }
+    // One-time application of the new 8-12 default rep range (increment is auto-derived from repLow).
+    // Flagged so it only runs once and never overwrites edits you make afterward.
+    if ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') && !ex._repDefaultApplied) {
+      ex.repLow = DEFAULT_REP_LOW;
+      ex.repHigh = DEFAULT_REP_HIGH;
+      ex._repDefaultApplied = true;
+      const live = state.exercises && state.exercises[ex.id];
+      if (live && live.targetReps != null) {
+        live.targetReps = Math.min(Math.max(live.targetReps, ex.repLow), ex.repHigh);
+      }
+    }
+  });
+});
+state.customDays = DAYS;
+saveState();
+
+function persistDays() {
+  state.customDays = DAYS;
+  saveState();
+}
+
+function getSetsMin(ex) { return ex.setsMin ?? ex.sets; }
+function getSetsMax(ex) { return ex.setsMax ?? (ex.sets + 2); }
+function getRepIncrement(ex) { return (ex.repLow ?? 0) >= 8 ? 2 : 1; }
+
+function getExState(ex) {
+  if (!state.exercises[ex.id]) {
+    if (ex.mode === 'weighted') {
+      state.exercises[ex.id] = { tier:0, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak:0 };
+    } else if (ex.mode === 'bodyweight') {
+      state.exercises[ex.id] = { targetReps: ex.startReps, failStreak:0 };
+    } else if (ex.mode === 'weighted_bw') {
+      state.exercises[ex.id] = { addedWeight: 0, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak:0 };
+    } else if (ex.mode === 'timed') {
+      state.exercises[ex.id] = { targetSeconds: ex.startSeconds, failStreak:0 };
+    }
+  }
+  const s = state.exercises[ex.id];
+  // Backward compatibility: exercises created before sets-progression existed won't have s.sets yet
+  if ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') && s.sets == null) {
+    s.sets = getSetsMin(ex);
+  }
+  return s;
+}
+
+function dateStr(d) {
+  const date = new Date(d);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Session starts are scoped per (calendar date + workout day label + session number),
+// so doing two different workouts on the same date - or the SAME workout twice in one
+// day - each get their own independent start time. Session 1 keeps the plain old key
+// format for backward compatibility with existing saved data.
+function sessionKey(dateKey, dayLabel, sessionNum = 1) {
+  return sessionNum > 1 ? `${dateKey}__${dayLabel}__s${sessionNum}` : `${dateKey}__${dayLabel}`;
+}
+
+// How many times a given (date, workout) has been started. Used to know which
+// session is "current" when the same workout is done more than once in a day.
+function getSessionCount(dateKey, dayLabel) {
+  state.sessionCount = state.sessionCount || {};
+  return state.sessionCount[`${dateKey}__${dayLabel}`] || 0;
+}
+
+// If a workout starts shortly before midnight and continues past it, sets logged
+// after midnight should still belong to the session that was already in progress,
+// not silently start counting toward a brand-new "day" for streaks/duration/completion.
+const SESSION_CARRYOVER_HOURS = 6;
+
+function getActiveSessionDateKey(dayLabel) {
+  const now = new Date();
+  const todayKey = dateStr(now);
+  state.sessionStarts = state.sessionStarts || {};
+  const todayNum = getSessionCount(todayKey, dayLabel) || 1;
+  if (state.sessionStarts[sessionKey(todayKey, dayLabel, todayNum)]) return todayKey;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = dateStr(yesterday);
+  const yesterdayNum = getSessionCount(yesterdayKey, dayLabel) || 1;
+  const yesterdayStart = state.sessionStarts[sessionKey(yesterdayKey, dayLabel, yesterdayNum)];
+  if (yesterdayStart && (now - new Date(yesterdayStart)) < SESSION_CARRYOVER_HOURS * 3600000) {
+    return yesterdayKey; // still within the same overnight session
+  }
+  return todayKey;
+}
+
+// Full identity of the session currently relevant to this workout day: which calendar
+// date it's anchored to, and which session-of-the-day it is (1 unless done again already).
+function getActiveSession(dayLabel) {
+  const anchorDate = getActiveSessionDateKey(dayLabel);
+  const sessionNum = getSessionCount(anchorDate, dayLabel) || 1;
+  return { anchorDate, sessionNum, key: sessionKey(anchorDate, dayLabel, sessionNum) };
+}
+
+// History entries store the real timestamp (for accurate ordering/history display) plus
+// a separate sessionDate/sessionNum marking which session they were logged under. Older
+// entries (from before this existed) fall back to their raw calendar date and session 1.
+function getEntryDateKey(h) {
+  return h.sessionDate || dateStr(h.date);
+}
+function getEntrySessionNum(h) {
+  return h.sessionNum || 1;
+}
+
+function getWeekKey(date) {
+  const d = new Date(date);
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate() - d.getDay()); // back to Sunday
+  return dateStr(d);
+}
+
+const WEEKLY_MIN_DAYS = 3;
+
+function getWeekWorkoutDayCount(weekKey) {
+  const daysInWeek = new Set(
+    state.history.filter(h => getWeekKey(h.date) === weekKey).map(h => getEntryDateKey(h))
+  );
+  return daysInWeek.size;
+}
+
+function computeStreak() {
+  let cursorWeek = getWeekKey(new Date());
+  if (getWeekWorkoutDayCount(cursorWeek) < WEEKLY_MIN_DAYS) {
+    const d = new Date(cursorWeek);
+    d.setDate(d.getDate() - 7);
+    cursorWeek = getWeekKey(d); // grace: this week isn't over yet, don't count it as a break
+  }
+  let count = 0;
+  while (getWeekWorkoutDayCount(cursorWeek) >= WEEKLY_MIN_DAYS) {
+    count++;
+    const d = new Date(cursorWeek);
+    d.setDate(d.getDate() - 7);
+    cursorWeek = getWeekKey(d);
+  }
+  return count;
+}
+
+function getHistoricalMax(exName, mode) {
+  const entries = state.history.filter(h => h.exercise === exName);
+  if (entries.length === 0) return null;
+  if (mode === 'weighted' || mode === 'weighted_bw') {
+    return Math.max(...entries.map(h => h.weight ?? 0));
+  }
+  return Math.max(...entries.map(h => Math.max(...h.sets)));
+}
+
+// Epley estimated 1-rep-max: folds the weight actually used together with the best
+// reps hit that session, so progress still shows up between equipment weight increases
+// (reps climb for a while before the weight tier does). For weighted_bw exercises this
+// is based on the added belt weight only — bodyweight itself isn't tracked, so it's a
+// relative-progress number rather than a true 1RM.
+function estimate1RM(weight, reps) {
+  if (!weight || !reps) return 0;
+  return Math.round(weight * (1 + reps / 30));
+}
+
+// How long ago the current all-time best for this exercise was last hit (not
+// necessarily the first time — the most recent time you touched that ceiling).
+function getDaysSinceLastPR(exName, mode) {
+  const entries = state.history.filter(h => h.exercise === exName && !h.skipped);
+  if (!entries.length) return null;
+  const valueOf = h => (mode === 'weighted' || mode === 'weighted_bw') ? (h.weight ?? 0) : Math.max(...h.sets);
+  const best = Math.max(...entries.map(valueOf));
+  const bestTimes = entries.filter(h => valueOf(h) === best).map(h => new Date(h.date).getTime());
+  return Math.floor((Date.now() - Math.max(...bestTimes)) / 86400000);
+}
+
+function formatDaysAgo(days) {
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return `${days}d ago`;
+}
+
+function formatDuration(mins) {
+  if (!mins) return '0 min';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m} min`;
+}
+
+// Every distinct workout session ever logged (date + day-type + session-of-day number),
+// deduplicated the same way the History tab does.
+function getAllUniqueSessions() {
+  const seen = new Map();
+  state.history.forEach(h => {
+    const dk = getEntryDateKey(h);
+    const num = getEntrySessionNum(h);
+    const key = sessionKey(dk, h.day, num);
+    if (!seen.has(key)) seen.set(key, { dateKey: dk, dayLabel: h.day, sessionNum: num });
+  });
+  return [...seen.values()];
+}
+
+function getMonthlySessionCounts(monthsBack = 6) {
+  const counts = {};
+  getAllUniqueSessions().forEach(({ dateKey }) => {
+    const monthKey = dateKey.slice(0, 7);
+    counts[monthKey] = (counts[monthKey] || 0) + 1;
+  });
+  const result = [];
+  const now = new Date();
+  for (let i = monthsBack - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    result.push({ key, label: d.toLocaleString('default', { month: 'short' }), count: counts[key] || 0 });
+  }
+  return result;
+}
+
+// Sessions per workout day-type in the last N days — flags a day/muscle-group that's
+// quietly been skipped while a rotation keeps moving forward.
+function getRecentDayFrequency(daysBack = 30) {
+  const cutoff = Date.now() - daysBack * 86400000;
+  const sessions = getAllUniqueSessions().filter(s => new Date(s.dateKey).getTime() >= cutoff);
+  return DAYS.map(d => ({
+    label: d.label,
+    icon: d.icon,
+    color: d.color,
+    count: sessions.filter(s => s.dayLabel === d.label).length
+  }));
+}
+
+function recordPR(exName, value, unit) {
+  state.prs = state.prs || [];
+  state.prs.unshift({ date: new Date().toISOString(), exercise: exName, value, unit });
+  state.prs = state.prs.slice(0, 20);
+}
+
+function getSessionDuration(dateKey, dayLabel, sessionNum = 1) {
+  const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
+  const sessionStart = state.sessionStarts && state.sessionStarts[sessionKey(dateKey, dayLabel, sessionNum)];
+
+  if (entries.length === 0) return null;
+  if (entries.length < 2 && !sessionStart) return null; // not enough data to estimate at all
+
+  const times = entries.map(h => new Date(h.date).getTime());
+  let startTime = Math.min(...times);
+  const endTime = Math.max(...times);
+
+  if (sessionStart) {
+    const capturedStart = new Date(sessionStart).getTime();
+    startTime = Math.min(startTime, capturedStart); // use whichever is earlier
+  }
+
+  const mins = Math.round((endTime - startTime) / 60000);
+  return mins > 0 ? mins : null;
+}
+
+function getTodayCompletionPct(day) {
+  if (!day.exercises.length) return 0;
+  const { anchorDate, sessionNum } = getActiveSession(day.label);
+  const doneToday = new Set(
+    state.history.filter(h => getEntryDateKey(h) === anchorDate && h.day === day.label && getEntrySessionNum(h) === sessionNum).map(h => h.exercise)
+  );
+  return Math.round((doneToday.size / day.exercises.length) * 100);
+}
+
+// ---------- VIEW STATE ----------
+function computeDefaultDayIdx() {
+  if (state.history.length === 0) return 0;
+  const last = state.history[state.history.length - 1];
+  const lastDayIdx = DAYS.findIndex(d => d.label === last.day);
+  if (lastDayIdx === -1) return 0;
+  if (dateStr(last.date) === dateStr(new Date())) return lastDayIdx; // continue today's in-progress session
+  return (lastDayIdx + 1) % DAYS.length; // move to next day in the rotation
+}
+let currentDayIdx = computeDefaultDayIdx();
+let progressDayIdx = 0;
+let progressExerciseId = null;
+let chartMetric = 'e1rm'; // 'e1rm' | 'weight' | 'volume'
+let chartRange = 'all'; // 'all' | '90' | '30' (days)
+
+function setChartMetric(m) {
+  chartMetric = m;
+  renderCharts();
+  // Only the chart/toggle need refreshing, but the toggle pills' active state
+  // lives in the full view markup, so a light re-render keeps them in sync.
+  render();
+}
+
+function setChartRange(r) {
+  chartRange = r;
+  renderCharts();
+  render();
+}
+
+function selectProgressDay(i) {
+  progressDayIdx = i;
+  progressExerciseId = null; // reset so it defaults to the first exercise of the new day
+  render();
+}
+
+function selectProgressExercise(exId) {
+  progressExerciseId = exId;
+  render();
+}
+let view = 'workout';
+let liveSets = {}; // exerciseId -> array of {reps or seconds, done}
+let timerInterval = null;
+
+const TRANSITION_REST_SECONDS = 60; // rest between finishing one exercise and starting the next
+
+// ---------- WAKE LOCK ----------
+let wakeLock = null;
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+  } catch (e) { /* not supported or denied, fail silently */ }
+}
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release().catch(()=>{}); wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && view === 'workout') requestWakeLock();
+});
+
+function setView(v) {
+  view = v;
+  document.querySelectorAll('.navbtn').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+  if (v === 'workout') requestWakeLock(); else releaseWakeLock();
+  render();
+}
+
+function selectDay(i) { currentDayIdx = i; liveSets = {}; render(); }
+
+// ---------- SWIPE NAVIGATION (switch day/group by swiping left/right) ----------
+let swipeStartX = null, swipeStartY = null, swipeStartTime = 0;
+const SWIPE_MIN_DX = 45;       // minimum horizontal travel to count as a deliberate swipe
+const SWIPE_MAX_DY = 70;       // more vertical travel than this means it's a scroll, not a swipe
+const SWIPE_TIME_LIMIT = 700;  // ms — ignore slow drags
+
+function handleSwipeStart(e) {
+  if (e.touches.length !== 1) { swipeStartX = null; return; }
+  // Don't hijack swipes that start on the horizontally-scrollable tab strip itself
+  if (e.target.closest('.tabs')) { swipeStartX = null; return; }
+  swipeStartX = e.touches[0].clientX;
+  swipeStartY = e.touches[0].clientY;
+  swipeStartTime = Date.now();
+}
+
+function handleSwipeEnd(e) {
+  if (swipeStartX === null) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - swipeStartX;
+  const dy = t.clientY - swipeStartY;
+  const dt = Date.now() - swipeStartTime;
+  swipeStartX = null;
+  if (dt > SWIPE_TIME_LIMIT) return;
+  if (Math.abs(dx) < SWIPE_MIN_DX) return;
+  if (Math.abs(dy) > SWIPE_MAX_DY) return;
+  if (Math.abs(dx) < Math.abs(dy)) return; // predominantly vertical -> treat as scroll
+
+  const direction = dx < 0 ? 1 : -1; // swipe left = next day, swipe right = previous day
+  if (view === 'workout') {
+    const next = (currentDayIdx + direction + DAYS.length) % DAYS.length; // wrap around at both ends
+    selectDay(next);
+  } else if (view === 'progress') {
+    const next = (progressDayIdx + direction + DAYS.length) % DAYS.length; // wrap around at both ends
+    selectProgressDay(next);
+  }
+}
+
+// Attach once to the stable #app container (its innerHTML is replaced on render,
+// but the element itself persists, so the listeners keep working).
+document.getElementById('app').addEventListener('touchstart', handleSwipeStart, { passive: true });
+document.getElementById('app').addEventListener('touchend', handleSwipeEnd, { passive: true });
+
+// ---------- LOGGING ----------
+function getLastValueForSet(ex, setIdx) {
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    const h = state.history[i];
+    if (h.exercise === ex.name && h.sets[setIdx] != null) return h.sets[setIdx];
+  }
+  return null;
+}
+
+function getTargetValue(ex) {
+  const s = getExState(ex);
+  if (ex.mode === 'timed') return s.targetSeconds;
+  return s.targetReps;
+}
+
+function ensureLive(ex) {
+  if (!liveSets[ex.id]) {
+    const target = getTargetValue(ex);
+    const s = getExState(ex);
+    const setCount = (ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets;
+    liveSets[ex.id] = Array.from({length: setCount}, () => ({ value: target, doneMark: false }));
+  }
+  return liveSets[ex.id];
+}
+
+function isDoneToday(exName, dayLabel) {
+  const { anchorDate, sessionNum } = getActiveSession(dayLabel);
+  return state.history.some(h => getEntryDateKey(h) === anchorDate && h.day === dayLabel && h.exercise === exName && getEntrySessionNum(h) === sessionNum);
+}
+
+function scrollToNextIncomplete() {
+  const day = DAYS[currentDayIdx];
+  const next = day.exercises.find(ex => !isDoneToday(ex.name, day.label));
+  if (next) {
+    const el = document.getElementById(`card-${next.id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } else {
+    const banner = document.querySelector('.complete-banner');
+    if (banner) banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+function getExerciseById(exId) {
+  for (const day of DAYS) {
+    const ex = day.exercises.find(e => e.id === exId);
+    if (ex) return ex;
+  }
+  return null;
+}
+
+function startTimerFor(exId) {
+  const ex = getExerciseById(exId);
+  if (ex) startRestTimer(ex.rest);
+}
+
+function matchSet1(exId) {
+  const arr = liveSets[exId];
+  if (!arr || arr.length === 0) return;
+  const first = arr[0].value;
+  for (let i = 1; i < arr.length; i++) arr[i].value = first;
+  if (navigator.vibrate) navigator.vibrate(20);
+  render();
+}
+
+function skipExercise(exId, exName) {
+  if (!confirm(`Skip ${exName} for today? No progress or history will be recorded.`)) return;
+  delete liveSets[exId];
+  render();
+  setTimeout(scrollToNextIncomplete, 100);
+}
+
+function adjustWeightLive(exId, direction) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  const s = getExState(ex);
+  if (ex.mode === 'weighted') {
+    const newTier = Math.min(Math.max(s.tier + direction, 0), WEIGHTS.length - 1);
+    if (newTier === s.tier) { alert(direction > 0 ? 'Already at your heaviest dumbbell.' : 'Already at your lightest dumbbell.'); return; }
+    s.tier = newTier;
+  } else if (ex.mode === 'weighted_bw') {
+    const newWeight = Math.max(0, s.addedWeight + direction * BELT_INCREMENT);
+    if (newWeight === s.addedWeight) { alert('Already at bodyweight (0 lb belt).'); return; }
+    s.addedWeight = newWeight;
+  } else return;
+  saveState();
+  if (navigator.vibrate) navigator.vibrate(15);
+  render();
+}
+
+function adjustSetsLive(exId, direction) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  const s = getExState(ex);
+  const arr = liveSets[exId];
+
+  if (ex.mode === 'weighted' || ex.mode === 'weighted_bw') {
+    const min = getSetsMin(ex), max = getSetsMax(ex);
+    const newSets = Math.min(Math.max(s.sets + direction, min), max);
+    if (newSets === s.sets) { alert(direction > 0 ? `Sets ceiling is ${max} (change it in Manage → Sets/Reps if you want higher).` : `Sets floor is ${min}.`); return; }
+    s.sets = newSets;
+  } else {
+    const newSets = Math.max(1, ex.sets + direction);
+    if (newSets === ex.sets) { alert('Minimum is 1 set.'); return; }
+    ex.sets = newSets;
+    persistDays();
+  }
+
+  if (arr) {
+    const target = getTargetValue(ex);
+    if (direction > 0) arr.push({ value: target, doneMark: false });
+    else if (direction < 0 && arr.length > 1) arr.pop();
+  }
+  saveState();
+  if (navigator.vibrate) navigator.vibrate(15);
+  render();
+}
+
+function startWorkoutNow() {
+  const today = dateStr(new Date());
+  const dayLabel = DAYS[currentDayIdx].label;
+  const countKey = `${today}__${dayLabel}`;
+  state.sessionCount = state.sessionCount || {};
+  state.sessionCount[countKey] = (state.sessionCount[countKey] || 0) + 1;
+  state.sessionStarts = state.sessionStarts || {};
+  state.sessionStarts[sessionKey(today, dayLabel, state.sessionCount[countKey])] = new Date().toISOString();
+  saveState();
+  if (navigator.vibrate) navigator.vibrate(20);
+  render();
+}
+
+function markSessionStartIfNeeded() {
+  const dayLabel = DAYS[currentDayIdx].label;
+  const { anchorDate, sessionNum, key } = getActiveSession(dayLabel);
+  state.sessionStarts = state.sessionStarts || {};
+  if (!state.sessionStarts[key]) {
+    // Subtract 2 minutes to account for the time spent actually performing this first set,
+    // which happened before this "done" tap and would otherwise go uncounted.
+    state.sessionStarts[key] = new Date(Date.now() - 2 * 60000).toISOString();
+    // If this is the very first set of a brand-new (not-yet-started) session, also
+    // register the session count so later lookups agree on which session this is.
+    const countKey = `${anchorDate}__${dayLabel}`;
+    state.sessionCount = state.sessionCount || {};
+    if (!state.sessionCount[countKey]) state.sessionCount[countKey] = sessionNum;
+    saveState();
+  }
+}
+
+function markSetDone(exId, setIdx) {
+  const arr = liveSets[exId];
+  const set = arr[setIdx];
+  set.doneMark = !set.doneMark;
+  if (set.doneMark) {
+    startTimerFor(exId);
+    markSessionStartIfNeeded();
+    if (navigator.vibrate) navigator.vibrate(15);
+  } else {
+    clearInterval(timerInterval);
+    const fab = document.getElementById('timerFab');
+    fab.style.display = 'none';
+    fab.classList.remove('urgent');
+  }
+  render();
+
+  const allDone = arr.every(x => x.doneMark);
+  if (allDone) {
+    const ex = getExerciseById(exId);
+    setTimeout(() => { if (ex) finishExercise(ex); }, 250); // brief pause so the green "done" state is visible first
+  }
+}
+
+let holdZeroTimer = null;
+let holdZeroFired = false;
+
+function startHoldZero(exId, setIdx) {
+  holdZeroFired = false;
+  holdZeroTimer = setTimeout(() => {
+    holdZeroFired = true;
+    const arr = liveSets[exId];
+    arr[setIdx].value = 0;
+    if (navigator.vibrate) navigator.vibrate([20,30,20]);
+    render();
+  }, 450);
+}
+
+function endHoldZero(exId, setIdx, delta) {
+  clearTimeout(holdZeroTimer);
+  if (!holdZeroFired) adjustSet(exId, setIdx, delta); // was a normal quick tap
+}
+
+function cancelHoldZero() {
+  clearTimeout(holdZeroTimer);
+}
+
+function adjustSet(exId, setIdx, delta) {
+  const arr = liveSets[exId];
+  arr[setIdx].value = Math.max(0, arr[setIdx].value + delta);
+  if (navigator.vibrate) navigator.vibrate(15);
+  render();
+}
+
+function typeSet(exId, setIdx) {
+  const arr = liveSets[exId];
+  const current = arr[setIdx].value;
+  const input = prompt('Enter actual value:', current);
+  if (input === null) return;
+  const n = parseInt(input);
+  if (!isNaN(n)) arr[setIdx].value = Math.max(0, n);
+  render();
+}
+
+function targetLabel(ex) {
+  const s = getExState(ex);
+  if (ex.mode === 'weighted') return `${WEIGHTS[s.tier]} lb x ${s.targetReps} reps x ${s.sets} sets`;
+  if (ex.mode === 'weighted_bw') return (s.addedWeight > 0 ? `Bodyweight +${s.addedWeight} lb` : `Bodyweight`) + ` x ${s.targetReps} reps x ${s.sets} sets`;
+  if (ex.mode === 'bodyweight') return `Bodyweight x ${s.targetReps} reps`;
+  if (ex.mode === 'timed') return `Hold ${s.targetSeconds}s`;
+}
+
+function finishExercise(ex) {
+  const arr = liveSets[ex.id];
+  if (!arr) { alert('Nothing to log yet.'); return; }
+  const s = getExState(ex);
+  const hasSkippedSet = arr.some(x => x.value === 0);
+  let success;
+  if (ex.mode === 'timed') {
+    success = arr.every(x => x.value >= s.targetSeconds);
+  } else {
+    success = arr.every(x => x.value >= s.targetReps);
+  }
+
+  let statusMsg = '';
+  let leveledUp = false;
+
+  if (hasSkippedSet) {
+    statusMsg = 'Set(s) logged as 0 (skipped) — progression left unchanged this session.';
+  } else if (ex.mode === 'weighted') {
+    const setsMax = getSetsMax(ex), setsMin = getSetsMin(ex);
+    const repInc = getRepIncrement(ex);
+    if (success) {
+      s.failStreak = 0;
+      if (s.targetReps < ex.repHigh) { s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh); statusMsg = `Progress: +${repInc} rep(s) next time`; }
+      else if (s.sets < setsMax) { s.sets++; s.targetReps = ex.repLow; statusMsg = `Added a set! Now ${s.sets} sets next time`; }
+      else if (s.tier < WEIGHTS.length - 1) { s.tier++; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = `Weight up! Next: ${WEIGHTS[s.tier]} lb, back to ${setsMin} sets`; leveledUp = true; }
+      else { statusMsg = 'Maxed out dumbbells and sets — try slower tempo instead.'; }
+    } else {
+      s.failStreak++;
+      if (s.failStreak >= 3) {
+        s.failStreak = 0;
+        if (s.targetReps > ex.repLow) { s.targetReps = Math.max(ex.repLow, s.targetReps - repInc); statusMsg = `Deload: -${repInc} rep(s)`; }
+        else if (s.sets > setsMin) { s.sets--; s.targetReps = ex.repLow; statusMsg = 'Deload: removed a set'; }
+        else if (s.tier > 0) { s.tier--; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = 'Deload: dropped a weight tier'; }
+      } else {
+        statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+      }
+    }
+  } else if (ex.mode === 'weighted_bw') {
+    const setsMax = getSetsMax(ex), setsMin = getSetsMin(ex);
+    const repInc = getRepIncrement(ex);
+    if (success) {
+      s.failStreak = 0;
+      if (s.targetReps < ex.repHigh) { s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh); statusMsg = `Progress: +${repInc} rep(s) next time`; }
+      else if (s.sets < setsMax) { s.sets++; s.targetReps = ex.repLow; statusMsg = `Added a set! Now ${s.sets} sets next time`; }
+      else { s.addedWeight += BELT_INCREMENT; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = `Belt up! Add ${s.addedWeight} lb next time, back to ${setsMin} sets`; leveledUp = true; }
+    } else {
+      s.failStreak++;
+      if (s.failStreak >= 3) {
+        s.failStreak = 0;
+        if (s.targetReps > ex.repLow) { s.targetReps = Math.max(ex.repLow, s.targetReps - repInc); statusMsg = `Deload: -${repInc} rep(s)`; }
+        else if (s.sets > setsMin) { s.sets--; s.targetReps = ex.repLow; statusMsg = 'Deload: removed a set'; }
+        else if (s.addedWeight > 0) { s.addedWeight = Math.max(0, s.addedWeight - BELT_INCREMENT); s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = 'Deload: removed belt weight'; }
+      } else {
+        statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+      }
+    }
+  } else if (ex.mode === 'bodyweight') {
+    if (success) { s.failStreak = 0; s.targetReps++; statusMsg = 'Progress: +1 rep next time'; }
+    else {
+      s.failStreak++;
+      if (s.failStreak >= 3) { s.failStreak = 0; s.targetReps = Math.max(1, s.targetReps - 2); statusMsg = 'Deload: -2 reps'; }
+      else statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+    }
+  } else if (ex.mode === 'timed') {
+    if (success) { s.failStreak = 0; s.targetSeconds += 10; statusMsg = 'Progress: +10 sec next time'; }
+    else {
+      s.failStreak++;
+      if (s.failStreak >= 3) { s.failStreak = 0; s.targetSeconds = Math.max(15, s.targetSeconds - 10); statusMsg = 'Deload: -10 sec'; }
+      else statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+    }
+  }
+
+  const prevMax = getHistoricalMax(ex.name, ex.mode);
+  const sessionBest = ex.mode === 'weighted' ? WEIGHTS[s.tier]
+    : ex.mode === 'weighted_bw' ? s.addedWeight
+    : Math.max(...arr.map(x => x.value));
+  const isPR = !hasSkippedSet && prevMax !== null && sessionBest > prevMax;
+
+  const activeSession = getActiveSession(DAYS[currentDayIdx].label);
+  state.history.push({
+    date: new Date().toISOString(),
+    sessionDate: activeSession.anchorDate,
+    sessionNum: activeSession.sessionNum,
+    day: DAYS[currentDayIdx].label,
+    exercise: ex.name,
+    mode: ex.mode,
+    sets: arr.map(x => x.value),
+    weight: ex.mode === 'weighted' ? WEIGHTS[s.tier] : (ex.mode === 'weighted_bw' ? s.addedWeight : null),
+    success,
+    skipped: hasSkippedSet
+  });
+  if (isPR) {
+    const unit = (ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? 'lb' : (ex.mode === 'timed' ? 'sec' : 'reps');
+    recordPR(ex.name, sessionBest, unit);
+  }
+  saveState();
+  alert(`${ex.name}: ${statusMsg}${isPR ? '\n🏆 New PR!' : ''}`);
+  delete liveSets[ex.id];
+  maybePromptBackup();
+  render();
+  const dayHasMoreToday = DAYS[currentDayIdx].exercises.some(e => !isDoneToday(e.name, DAYS[currentDayIdx].label));
+  if (dayHasMoreToday) {
+    startRestTimer(ex.transitionRest ?? TRANSITION_REST_SECONDS); // rest before moving to the next exercise
+  }
+  setTimeout(scrollToNextIncomplete, 100);
+  if (leveledUp) {
+    const el = document.getElementById(`card-${ex.id}`);
+    if (el) {
+      el.classList.add('levelup');
+      setTimeout(() => el.classList.remove('levelup'), 1000);
+    }
+  }
+}
+
+// ---------- REST TIMER ----------
+let restRemaining = 0;
+function startRestTimer(seconds) {
+  clearInterval(timerInterval);
+  restRemaining = seconds;
+  const fab = document.getElementById('timerFab');
+  fab.style.display = 'flex';
+  fab.classList.remove('urgent');
+  updateFab();
+  timerInterval = setInterval(() => {
+    restRemaining--;
+    if (restRemaining <= 0) {
+      clearInterval(timerInterval);
+      fab.style.display = 'none';
+      fab.classList.remove('urgent');
+      finalAlarm();
+    } else {
+      updateFab();
+      if (restRemaining <= 5) {
+        fab.classList.add('urgent');
+        countdownTick();
+      }
+    }
+  }, 1000);
+}
+function updateFab() {
+  const fab = document.getElementById('timerFab');
+  const m = Math.floor(restRemaining/60), s = restRemaining%60;
+  fab.innerHTML = `<span class="fablabel">REST</span>${m}:${s.toString().padStart(2,'0')}`;
+}
+function skipTimer() {
+  clearInterval(timerInterval);
+  const fab = document.getElementById('timerFab');
+  fab.style.display = 'none';
+  fab.classList.remove('urgent');
+}
+function beep(freq, gain, durationMs, type) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type = type || 'square';
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = freq; g.gain.value = gain;
+    o.start(); setTimeout(() => { o.stop(); ctx.close(); }, durationMs);
+  } catch(e) {}
+}
+function countdownTick() {
+  // Sharp, loud tick each second for the final 5-second countdown
+  beep(1046, 0.55, 150, 'square');
+  if (navigator.vibrate) navigator.vibrate(180);
+}
+function finalAlarm() {
+  // Loud, long, repeated alarm signaling rest is fully over
+  const pattern = [500,150,500,150,500,150,500,150,700];
+  if (navigator.vibrate) navigator.vibrate(pattern);
+  let i = 0;
+  const alarmInterval = setInterval(() => {
+    beep(i % 2 === 0 ? 1318 : 988, 0.85, 350, 'square');
+    i++;
+    if (i >= 5) clearInterval(alarmInterval);
+  }, 400);
+}
+
+// ---------- RENDER ----------
+function render() {
+  const app = document.getElementById('app');
+  if (view === 'workout') app.innerHTML = renderWorkout();
+  else if (view === 'progress') app.innerHTML = renderProgress();
+  else if (view === 'manage') app.innerHTML = renderManage();
+  else app.innerHTML = renderHistory();
+
+  if (view === 'progress') setTimeout(renderCharts, 0);
+  requestAnimationFrame(scrollActiveTabsIntoView);
+}
+
+// Keeps the currently-selected pill scrolled into view within its (horizontally
+// scrollable) tab strip — e.g. after a swipe moves the selection off-screen.
+function scrollTabIntoView(containerId, idx) {
+  const container = document.getElementById(containerId);
+  if (!container || idx < 0) return;
+  const child = container.children[idx];
+  if (child) child.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+}
+
+function scrollActiveTabsIntoView() {
+  if (view === 'workout') {
+    scrollTabIntoView('workoutDayTabs', currentDayIdx);
+  } else if (view === 'progress') {
+    scrollTabIntoView('progressDayTabs', progressDayIdx);
+    const progDay = DAYS[progressDayIdx];
+    const exIdx = progDay ? progDay.exercises.findIndex(e => e.id === progressExerciseId) : -1;
+    scrollTabIntoView('progressExerciseTabs', exIdx);
+  }
+}
+
+function renderWorkout() {
+  const tabs = DAYS.map((d,i) => {
+    const pct = getTodayCompletionPct(d);
+    const active = i === currentDayIdx;
+    const tabStyle = active ? `background:${d.color}; color:#fff;` : '';
+    const todayKey = dateStr(new Date());
+    const sessionsToday = getSessionCount(todayKey, d.label);
+    const sessionTag = sessionsToday > 1 ? `<span class="badge" style="padding:1px 6px; font-size:9.5px;">×${sessionsToday}</span>` : '';
+    return `<div class="tab" style="${tabStyle}" onclick="selectDay(${i})">
+      ${d.icon} ${d.label} ${sessionTag}
+      <span class="ring" style="background: conic-gradient(${d.color} ${pct*3.6}deg, var(--ring-track) 0deg)"><span class="ring-inner">${pct === 100 ? '✓' : ''}</span></span>
+    </div>`;
+  }).join('');
+
+  const streakEl = document.getElementById('streakBadge');
+  if (streakEl) {
+    const streak = computeStreak();
+    const thisWeek = getWeekWorkoutDayCount(getWeekKey(new Date()));
+    const weekPart = `${thisWeek}/${DAYS.length} days this week`;
+    streakEl.textContent = streak > 0 ? `🔥 ${streak} week streak · ${weekPart}` : weekPart;
+  }
+
+  const day = DAYS[currentDayIdx];
+  const activeSessionInfo = getActiveSession(day.label);
+  const sessionStart = state.sessionStarts && state.sessionStarts[activeSessionInfo.key];
+  const sessionComplete = sessionStart && getTodayCompletionPct(day) === 100;
+  const startedLabel = sessionStart
+    ? `✅ Started at ${new Date(sessionStart).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}${activeSessionInfo.sessionNum > 1 ? ` (session ${activeSessionInfo.sessionNum})` : ''}`
+    : '';
+  const startBar = !sessionStart
+    ? `<div class="card" style="text-align:center; padding:10px;">
+        <button class="btn" onclick="startWorkoutNow()" style="width:100%;">▶ Begin Workout</button>
+        <div class="meta" style="margin-top:6px; margin-bottom:0;">Tap when you walk in for the most accurate session time</div>
+      </div>`
+    : sessionComplete
+      ? `<div class="card" style="text-align:center; padding:10px;">
+          <span class="badge up">${startedLabel}</span>
+          <div style="margin-top:8px;"><button class="btn small secondary" onclick="startWorkoutNow()">↻ Start Another Session Today</button></div>
+        </div>`
+      : `<div class="card" style="text-align:center; padding:10px;"><span class="badge up">${startedLabel}</span></div>`;
+
+  const cards = day.exercises.map(ex => {
+    const s = getExState(ex);
+    const arr = ensureLive(ex);
+    const step = ex.mode === 'timed' ? 5 : 1;
+    const setsHtml = arr.map((set, i) => {
+      return `<div class="setbox ${set.doneMark?'done':''}">
+        <button class="stepbtn"
+          onpointerdown="startHoldZero('${ex.id}', ${i})"
+          onpointerup="endHoldZero('${ex.id}', ${i}, -${step})"
+          onpointerleave="cancelHoldZero()"
+          onpointercancel="cancelHoldZero()">−</button>
+        <span class="setval" onclick="typeSet('${ex.id}', ${i})">${set.value}</span>
+        <button class="stepbtn" onclick="adjustSet('${ex.id}', ${i}, ${step})">+</button>
+        <button class="donebtn" onclick="markSetDone('${ex.id}', ${i})">${set.doneMark?'✓':'Done'}</button>
+      </div>`;
+    }).join('');
+
+    const badge = s.failStreak > 0 ? `<span class="badge deload">${s.failStreak}/3 missed</span>` : `<span class="badge up">on track</span>`;
+    const doneToday = isDoneToday(ex.name, day.label);
+
+    const weightControl = (ex.mode === 'weighted' || ex.mode === 'weighted_bw')
+      ? `<div class="livectrl">
+          <span class="livectrl-label">Weight</span>
+          <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', -1)">−</button>
+          <span class="livectrl-val">${ex.mode === 'weighted' ? WEIGHTS[s.tier] + ' lb' : (s.addedWeight > 0 ? '+' + s.addedWeight + ' lb' : 'BW')}</span>
+          <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', 1)">+</button>
+        </div>` : '';
+
+    const setsControl = `<div class="livectrl">
+          <span class="livectrl-label">Sets</span>
+          <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', -1)">−</button>
+          <span class="livectrl-val">${(ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets}</span>
+          <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', 1)">+</button>
+        </div>`;
+
+    return `<div class="card ${doneToday?'done-today':''}" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
+      <div class="row"><h3>${doneToday?'✅ ':''}${ex.name}</h3>${badge}</div>
+      <div class="meta">Target: ${targetLabel(ex)}</div>
+      <div class="row" style="margin-bottom:10px; gap:16px;">${weightControl}${setsControl}</div>
+      <div class="sets">${setsHtml}</div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn small secondary" onclick="matchSet1('${ex.id}')">Match set 1</button>
+        <button class="btn small secondary" onclick="skipExercise('${ex.id}', '${ex.name}')">Skip</button>
+        <button class="btn small" onclick="finishExercise(DAYS[${currentDayIdx}].exercises.find(e=>e.id==='${ex.id}'))">Finish</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  const pct = getTodayCompletionPct(day);
+  const completeBanner = pct === 100
+    ? `<div class="card complete-banner">🎉 ${day.label} workout completed!</div>`
+    : '';
+
+  return `<div class="tabs" id="workoutDayTabs">${tabs}</div><main>${startBar}${completeBanner}${cards}</main>`;
+}
+
+function getMuscleGroupDurationStats(dayLabel) {
+  const seen = new Map();
+  state.history.filter(h => h.day === dayLabel).forEach(h => {
+    const dk = getEntryDateKey(h);
+    const num = getEntrySessionNum(h);
+    const key = dk + '__s' + num;
+    if (!seen.has(key)) seen.set(key, { dateKey: dk, sessionNum: num });
+  });
+  const sessions = [...seen.values()].sort((a,b) => a.dateKey.localeCompare(b.dateKey) || a.sessionNum - b.sessionNum);
+  const durationsWithDate = sessions.map(({dateKey, sessionNum}) => {
+    const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
+    if (entries.length < 2) return null;
+    const times = entries.map(h => new Date(h.date).getTime());
+    return { date: dateKey, mins: Math.round((Math.max(...times) - Math.min(...times)) / 60000) };
+  }).filter(d => d != null);
+  if (durationsWithDate.length === 0) return null;
+  const durations = durationsWithDate.map(d => d.mins);
+  const mean = Math.round(durations.reduce((a,b) => a+b, 0) / durations.length);
+  const last = durationsWithDate[durationsWithDate.length - 1];
+  return { mean, min: Math.min(...durations), max: Math.max(...durations), count: durations.length, last: last.mins, lastDate: last.date };
+}
+
+function getOverviewStats() {
+  const totalSessions = new Set(state.history.map(h => `${h.sessionDate || dateStr(h.date)}::${h.day}::${h.sessionNum || 1}`)).size;
+  const totalVolume = state.history.reduce((sum, h) => {
+    if (h.weight && !h.skipped) return sum + h.weight * h.sets.reduce((a,b) => a+b, 0);
+    return sum;
+  }, 0);
+  const exercisesTracked = new Set(state.history.map(h => h.exercise)).size;
+  const thisMonthKey = dateStr(new Date()).slice(0,7);
+  const thisMonthSessions = new Set(
+    state.history.filter(h => (h.sessionDate || dateStr(h.date)).startsWith(thisMonthKey))
+      .map(h => `${h.sessionDate || dateStr(h.date)}::${h.day}::${h.sessionNum || 1}`)
+  ).size;
+
+  let totalTimeMinutes = 0, timedSessionCount = 0;
+  getAllUniqueSessions().forEach(({dateKey, dayLabel, sessionNum}) => {
+    const mins = getSessionDuration(dateKey, dayLabel, sessionNum);
+    if (mins != null) { totalTimeMinutes += mins; timedSessionCount++; }
+  });
+  const avgSessionMinutes = timedSessionCount ? Math.round(totalTimeMinutes / timedSessionCount) : null;
+
+  return { totalSessions, totalVolume: Math.round(totalVolume), exercisesTracked, thisMonthSessions, totalTimeMinutes, avgSessionMinutes };
+}
+
+function getAllTimeBests(day) {
+  return day.exercises.map(ex => {
+    const best = getHistoricalMax(ex.name, ex.mode);
+    if (best === null) return null;
+    const unit = (ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? 'lb' : (ex.mode === 'timed' ? 'sec' : 'reps');
+    const daysSince = getDaysSinceLastPR(ex.name, ex.mode);
+    return { name: ex.name, best, unit, daysSince };
+  }).filter(Boolean);
+}
+
+function renderProgress() {
+  if (progressDayIdx >= DAYS.length) progressDayIdx = 0;
+  const progDay = DAYS[progressDayIdx];
+
+  const progTabs = DAYS.map((d,i) => {
+    const active = i === progressDayIdx;
+    const tabStyle = active ? `background:${d.color}; color:#fff;` : '';
+    return `<div class="tab" style="${tabStyle}" onclick="selectProgressDay(${i})">${d.icon} ${d.label}</div>`;
+  }).join('');
+
+  if (!progDay.exercises.find(e => e.id === progressExerciseId)) {
+    progressExerciseId = progDay.exercises[0] ? progDay.exercises[0].id : null;
+  }
+
+  const exercisePills = progDay.exercises.map(ex => {
+    const active = ex.id === progressExerciseId;
+    const style = active ? `background:${progDay.color}; color:#fff; border-color:transparent;` : '';
+    return `<div class="tab" style="${style}" onclick="selectProgressExercise('${ex.id}')">${ex.name}</div>`;
+  }).join('') || `<div class="empty" style="padding:10px 0;">No exercises on this day yet.</div>`;
+
+  const prs = (state.prs || []).slice(0, 5).map(p => {
+    const daysAgo = Math.floor((Date.now() - new Date(p.date).getTime()) / 86400000);
+    return `<div class="histitem">🏆 <strong>${p.exercise}</strong> — ${p.value} ${p.unit} <span style="color:var(--text-faint)">(${new Date(p.date).toLocaleDateString()} · ${formatDaysAgo(daysAgo)})</span></div>`;
+  }).join('') || `<div class="empty" style="padding:14px 0;">No PRs yet — keep logging!</div>`;
+
+  const durationByDay = DAYS.map(d => {
+    const stats = getMuscleGroupDurationStats(d.label);
+    return `<div class="histitem">
+      <strong>${d.icon} ${d.label}</strong><br>
+      ${stats
+        ? `avg <strong>${stats.mean} min</strong> · range ${stats.min}–${stats.max} min <span style="color:var(--text-faint)">(${stats.count} session${stats.count>1?'s':''})</span><br>
+           last session: <strong>${stats.last} min</strong> <span style="color:var(--text-faint)">(${new Date(stats.lastDate).toLocaleDateString()})</span>`
+        : `<span style="color:var(--text-faint)">Not enough data yet</span>`}
+    </div>`;
+  }).join('');
+
+  const overview = getOverviewStats();
+  const bests = getAllTimeBests(progDay);
+  const bestsHtml = bests.length
+    ? bests.map(b => `<div class="histitem row">
+        <span>${b.name}</span>
+        <span style="text-align:right;"><strong>${b.best} ${b.unit}</strong><br><span style="font-size:11px; color:var(--text-faint);">${b.daysSince != null ? formatDaysAgo(b.daysSince) : ''}</span></span>
+      </div>`).join('')
+    : `<div class="empty" style="padding:10px 0;">No history yet for this day.</div>`;
+
+  const monthly = getMonthlySessionCounts(6);
+  const maxMonthly = Math.max(1, ...monthly.map(m => m.count));
+  const monthlyBarsHtml = monthly.map(m => {
+    const heightPct = Math.round((m.count / maxMonthly) * 100);
+    return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%;">
+      <div style="width:100%; max-width:22px; height:${Math.max(heightPct, m.count>0?6:2)}%; background:${m.count>0?'var(--accent)':'var(--surface-raised)'}; border-radius:4px 4px 0 0;"></div>
+      <div style="font-size:9.5px; color:var(--text-faint); margin-top:4px;">${m.label}</div>
+      <div style="font-size:10px; color:var(--text-dim); font-weight:700;">${m.count}</div>
+    </div>`;
+  }).join('');
+
+  const dayFrequency = getRecentDayFrequency(30);
+  const maxFreq = Math.max(1, ...dayFrequency.map(d => d.count));
+  const balanceHtml = dayFrequency.map(d => {
+    const pct = Math.round((d.count / maxFreq) * 100);
+    return `<div class="histitem">
+      <div class="row"><span>${d.icon} ${d.label}</span><strong>${d.count}×</strong></div>
+      <div style="height:6px; background:var(--surface-raised); border-radius:3px; overflow:hidden; margin-top:5px;">
+        <div style="width:${pct}%; height:100%; background:${d.color};"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<main>
+    <div class="card">
+      <h3>📊 Overview</h3>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px;">
+        <div><div class="livectrl-label">Total Sessions</div><div style="font-size:22px; font-weight:800;">${overview.totalSessions}</div></div>
+        <div><div class="livectrl-label">This Month</div><div style="font-size:22px; font-weight:800;">${overview.thisMonthSessions}</div></div>
+        <div><div class="livectrl-label">Exercises Tracked</div><div style="font-size:22px; font-weight:800;">${overview.exercisesTracked}</div></div>
+        <div><div class="livectrl-label">Total Volume Lifted</div><div style="font-size:22px; font-weight:800;">${overview.totalVolume.toLocaleString()} lb</div></div>
+        <div><div class="livectrl-label">Total Time Trained</div><div style="font-size:22px; font-weight:800;">${formatDuration(overview.totalTimeMinutes)}</div></div>
+        <div><div class="livectrl-label">Avg Session Length</div><div style="font-size:22px; font-weight:800;">${overview.avgSessionMinutes != null ? overview.avgSessionMinutes+' min' : '—'}</div></div>
+      </div>
+      <div style="margin-top:16px;">
+        <div class="livectrl-label" style="margin-bottom:8px;">Workouts per Month</div>
+        <div style="display:flex; align-items:flex-end; gap:6px; height:60px;">${monthlyBarsHtml}</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>🏆 Recent PRs</h3>
+      ${prs}
+    </div>
+    <div class="card">
+      <h3>⚖️ Muscle-Group Balance <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(last 30 days)</span></h3>
+      ${balanceHtml}
+    </div>
+    <div class="card">
+      <h3>🥇 ${progDay.icon} ${progDay.label} — All-Time Bests</h3>
+      ${bestsHtml}
+    </div>
+    <div class="card">
+      <h3>⏱ Session Time by Day</h3>
+      ${durationByDay}
+    </div>
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="tabs" id="progressDayTabs" style="border-radius:16px 16px 0 0;">${progTabs}</div>
+      <div style="padding:16px;">
+        <h3 style="margin-bottom:10px;">${progDay.icon} ${progDay.label} — Progression</h3>
+        <div class="tabs" id="progressExerciseTabs" style="padding:0 0 12px 0; background:transparent;">${exercisePills}</div>
+        ${(() => {
+          const selectedEx = getExerciseById(progressExerciseId);
+          const supportsWeight = selectedEx && (selectedEx.mode === 'weighted' || selectedEx.mode === 'weighted_bw');
+          const metricPills = supportsWeight ? `<div class="tabs" style="padding:0 0 8px 0; background:transparent;">
+            <div class="tab" style="${chartMetric==='e1rm'?`background:${progDay.color};color:#fff;`:''}" onclick="setChartMetric('e1rm')">Est. 1RM</div>
+            <div class="tab" style="${chartMetric==='weight'?`background:${progDay.color};color:#fff;`:''}" onclick="setChartMetric('weight')">Weight</div>
+            <div class="tab" style="${chartMetric==='volume'?`background:${progDay.color};color:#fff;`:''}" onclick="setChartMetric('volume')">Volume</div>
+          </div>` : '';
+          const rangePills = `<div class="tabs" style="padding:0 0 12px 0; background:transparent;">
+            <div class="tab" style="${chartRange==='30'?`background:${progDay.color};color:#fff;`:''}" onclick="setChartRange('30')">30d</div>
+            <div class="tab" style="${chartRange==='90'?`background:${progDay.color};color:#fff;`:''}" onclick="setChartRange('90')">90d</div>
+            <div class="tab" style="${chartRange==='all'?`background:${progDay.color};color:#fff;`:''}" onclick="setChartRange('all')">All time</div>
+          </div>`;
+          return metricPills + rangePills;
+        })()}
+        <canvas id="progressChart"></canvas>
+        <div class="meta" id="predictionText" style="margin-top:8px;"></div>
+      </div>
+    </div>
+  </main>`;
+}
+
+let chartRef = null;
+function renderCharts() {
+  const ex = getExerciseById(progressExerciseId);
+  const predEl = document.getElementById('predictionText');
+  const canvas = document.getElementById('progressChart');
+  if (!ex) {
+    if (predEl) predEl.textContent = 'Add an exercise to this day to see progression.';
+    if (chartRef) { chartRef.destroy(); chartRef = null; }
+    return;
+  }
+  if (typeof Chart === 'undefined') {
+    if (predEl) predEl.textContent = 'Charts need internet the first time to load (they\u2019re cached offline after that).';
+    if (canvas) canvas.style.display = 'none';
+    return;
+  }
+
+  const supportsWeight = ex.mode === 'weighted' || ex.mode === 'weighted_bw';
+  const isVolumeMode = chartMetric === 'volume' && supportsWeight;
+  const isE1rmMode = chartMetric === 'e1rm' && supportsWeight;
+
+  const rangeDays = chartRange === '30' ? 30 : chartRange === '90' ? 90 : null;
+  let points = state.history.filter(h => ex.name === h.exercise && !h.skipped);
+  if (rangeDays != null) {
+    const cutoff = Date.now() - rangeDays * 86400000;
+    points = points.filter(p => new Date(p.date).getTime() >= cutoff);
+  }
+
+  if (points.length === 0) {
+    if (chartRef) { chartRef.destroy(); chartRef = null; }
+    if (canvas) canvas.style.display = 'none';
+    if (predEl) predEl.textContent = 'No sessions logged in this time range.';
+    return;
+  }
+  if (canvas) canvas.style.display = '';
+
+  const labels = points.map(p => new Date(p.date).toLocaleDateString());
+  const data = isVolumeMode
+    ? points.map(p => (p.weight || 0) * p.sets.reduce((a,b) => a+b, 0))
+    : isE1rmMode
+      ? points.map(p => estimate1RM(p.weight || 0, Math.max(...p.sets)))
+      : points.map(p => p.weight ?? Math.max(...p.sets));
+
+  // Simple linear regression on index vs value for trend/prediction
+  let predictionMsg = '';
+  if (isVolumeMode) {
+    if (data.length >= 3) {
+      const last = data[data.length - 1];
+      const first = data[0];
+      const pctChange = first > 0 ? Math.round(((last - first) / first) * 100) : 0;
+      predictionMsg = `Total volume per session is ${pctChange >= 0 ? 'up' : 'down'} ${Math.abs(pctChange)}% over this range.`;
+    } else {
+      predictionMsg = 'Log a few more sessions to see a volume trend.';
+    }
+  } else if (data.length >= 3) {
+    const n = data.length;
+    const xs = data.map((_, i) => i);
+    const xMean = xs.reduce((a,b)=>a+b,0) / n;
+    const yMean = data.reduce((a,b)=>a+b,0) / n;
+    let num = 0, den = 0;
+    for (let i = 0; i < n; i++) { num += (xs[i]-xMean)*(data[i]-yMean); den += (xs[i]-xMean)**2; }
+    const slope = den !== 0 ? num/den : 0;
+    const intercept = yMean - slope * xMean;
+    const futureIndex = n + 9; // project ~10 sessions ahead
+    let predicted = Math.round(intercept + slope * futureIndex);
+
+    if (isE1rmMode) {
+      predictionMsg = slope > 0
+        ? `At current pace, ~${predicted} lb estimated 1RM projected in ~10 more sessions.`
+        : `Trend is flat/declining — keep logging for a better estimate.`;
+    } else if (ex.mode === 'weighted') {
+      const capped = Math.min(predicted, WEIGHTS[WEIGHTS.length-1]);
+      if (data[data.length-1] >= WEIGHTS[WEIGHTS.length-1]) {
+        predictionMsg = `Already at your equipment ceiling (${WEIGHTS[WEIGHTS.length-1]} lb) — further gains need higher reps/tempo, not heavier dumbbells.`;
+      } else if (slope <= 0) {
+        predictionMsg = `Trend is flat/declining — no clear projection yet. Keep logging for a better estimate.`;
+      } else {
+        predictionMsg = `At current pace, ~${capped} lb projected in ~10 more sessions.`;
+      }
+    } else if (ex.mode === 'weighted_bw') {
+      predictionMsg = slope > 0
+        ? `At current pace, ~+${Math.max(0,predicted)} lb belt weight projected in ~10 more sessions.`
+        : `Trend is flat/declining — keep logging for a better estimate.`;
+    } else if (ex.mode === 'timed') {
+      predictionMsg = slope > 0 ? `At current pace, ~${predicted}s hold projected in ~10 more sessions.` : `Trend is flat — keep logging.`;
+    } else {
+      predictionMsg = slope > 0 ? `At current pace, ~${predicted} reps projected in ~10 more sessions.` : `Trend is flat — keep logging.`;
+    }
+  } else {
+    predictionMsg = 'Log a few more sessions to unlock a trend projection.';
+  }
+  if (ex.mode === 'weighted_bw' && isE1rmMode) {
+    predictionMsg += ' (Based on added belt weight only — bodyweight itself isn\u2019t tracked.)';
+  }
+  if (predEl) predEl.textContent = predictionMsg;
+
+  if (chartRef) chartRef.destroy();
+  const chartLabel = isVolumeMode ? 'Total Volume (lb)' : isE1rmMode ? 'Estimated 1RM (lb)' : 'Weight / Best reps';
+  const chartColor = isVolumeMode ? '#ff6b4a' : isE1rmMode ? '#3ecf6e' : '#4f7cff';
+  const cssVars = getComputedStyle(document.documentElement);
+  const textColor = cssVars.getPropertyValue('--text').trim() || '#e8e8ec';
+  const textDimColor = cssVars.getPropertyValue('--text-dim').trim() || '#9aa0ac';
+  chartRef = new Chart(canvas, {
+    type: 'line',
+    data: { labels, datasets: [{ label: chartLabel, data, borderColor: chartColor, backgroundColor: chartColor + '26', fill:true, tension:0.3 }] },
+    options: {
+      plugins: { legend: { labels: { color: textColor } } },
+      scales: { x:{ ticks:{ color: textDimColor } }, y:{ ticks:{ color: textDimColor }, beginAtZero:false } }
+    }
+  });
+}
+
+let calendarOffset = 0;
+
+function changeMonth(delta) {
+  calendarOffset += delta;
+  render();
+}
+
+function renderCalendar() {
+  const workoutDates = new Set(state.history.map(h => getEntryDateKey(h)));
+  const base = new Date();
+  base.setMonth(base.getMonth() + calendarOffset);
+  const year = base.getFullYear();
+  const month = base.getMonth();
+  const monthLabel = base.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  const firstDay = new Date(year, month, 1);
+  const startWeekday = firstDay.getDay(); // 0 = Sunday
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayStr = dateStr(new Date());
+
+  const dowHeaders = ['S','M','T','W','T','F','S'].map(d => `<div class="cal-dow">${d}</div>`).join('');
+
+  let cells = '';
+  for (let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell empty"></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const cellDate = new Date(year, month, day);
+    const key = dateStr(cellDate);
+    const worked = workoutDates.has(key);
+    const isToday = key === todayStr;
+    cells += `<div class="cal-cell ${worked?'worked':''} ${isToday?'today':''}">${day}</div>`;
+  }
+
+  return `<div class="card">
+    <div class="row">
+      <button class="btn small secondary" onclick="changeMonth(-1)">‹</button>
+      <h3>${monthLabel}</h3>
+      <button class="btn small secondary" onclick="changeMonth(1)">›</button>
+    </div>
+    <div class="cal-grid">${dowHeaders}${cells}</div>
+    <div class="meta" style="margin-top:8px;">🟢 worked out · ⬜ rest / no log</div>
+  </div>`;
+}
+
+function resetAllData() {
+  const confirmText = prompt('This will permanently delete ALL workout history, progression, PRs, and streaks (your exercise list stays intact). Type RESET to confirm:');
+  if (confirmText !== 'RESET') { alert('Cancelled — nothing was deleted.'); return; }
+  const keepDays = DAYS;
+  state = { exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays };
+  saveState();
+  liveSets = {};
+  currentDayIdx = 0;
+  alert('All data reset. Exercise list was kept.');
+  setView('workout');
+}
+
+function renameDay(dayIdx) {
+  const day = DAYS[dayIdx];
+  const newName = prompt(`Rename "${day.label}" to:`, day.label);
+  if (!newName || !newName.trim() || newName.trim() === day.label) return;
+  const oldLabel = day.label;
+  const cleanName = newName.trim();
+  day.label = cleanName;
+  // Cascade: update all history entries and PRs that reference the old day label
+  state.history.forEach(h => { if (h.day === oldLabel) h.day = cleanName; });
+  // Cascade: session start keys are scoped by date+day label(+session number), so rekey any that used the old label
+  const rekeyKnownFormat = (obj) => {
+    if (!obj) return;
+    Object.keys(obj).forEach(key => {
+      // matches "<date>__<oldLabel>" or "<date>__<oldLabel>__s<N>"
+      const suffixMatch = key.endsWith(`__${oldLabel}`) ? '' :
+        (key.match(/__s\d+$/) && key.slice(0, key.lastIndexOf('__s')).endsWith(`__${oldLabel}`)) ? key.slice(key.lastIndexOf('__s')) : null;
+      if (suffixMatch === null) return;
+      const base = suffixMatch ? key.slice(0, -(`__${oldLabel}${suffixMatch}`.length)) : key.slice(0, -(`__${oldLabel}`.length));
+      const newKey = `${base}__${cleanName}${suffixMatch || ''}`;
+      obj[newKey] = obj[key];
+      delete obj[key];
+    });
+  };
+  rekeyKnownFormat(state.sessionStarts);
+  rekeyKnownFormat(state.sessionCount);
+  persistDays();
+  saveState();
+  render();
+}
+
+function moveDay(dayIdx, direction) {
+  const target = dayIdx + direction;
+  if (target < 0 || target >= DAYS.length) return;
+  [DAYS[dayIdx], DAYS[target]] = [DAYS[target], DAYS[dayIdx]];
+  // Keep the same day visually selected after reorder, on both workout and progress tabs
+  if (currentDayIdx === dayIdx) currentDayIdx = target;
+  else if (currentDayIdx === target) currentDayIdx = dayIdx;
+  if (progressDayIdx === dayIdx) progressDayIdx = target;
+  else if (progressDayIdx === target) progressDayIdx = dayIdx;
+  persistDays();
+  render();
+}
+
+function renameExercise(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  const newName = prompt(`Rename "${ex.name}" to:`, ex.name);
+  if (!newName || !newName.trim() || newName.trim() === ex.name) return;
+  const oldName = ex.name;
+  const cleanName = newName.trim();
+  ex.name = cleanName;
+  // Cascade: update history and PR records so charts/PR lookups still match this exercise
+  state.history.forEach(h => { if (h.exercise === oldName) h.exercise = cleanName; });
+  if (state.prs) state.prs.forEach(p => { if (p.exercise === oldName) p.exercise = cleanName; });
+  persistDays();
+  saveState();
+  render();
+}
+
+function moveExercise(dayIdx, exIdx, direction) {
+  const list = DAYS[dayIdx].exercises;
+  const target = exIdx + direction;
+  if (target < 0 || target >= list.length) return;
+  [list[exIdx], list[target]] = [list[target], list[exIdx]];
+  persistDays();
+  render();
+}
+
+function removeDay(dayIdx) {
+  const day = DAYS[dayIdx];
+  if (DAYS.length <= 1) { alert('You need at least one day.'); return; }
+  if (!confirm(`Delete the entire "${day.label}" day and ALL its exercises + history? This cannot be undone.`)) return;
+  const exNames = day.exercises.map(e => e.name);
+  const exIds = day.exercises.map(e => e.id);
+  state.history = state.history.filter(h => !exNames.includes(h.exercise));
+  if (state.prs) state.prs = state.prs.filter(p => !exNames.includes(p.exercise));
+  exIds.forEach(id => { if (state.exercises) delete state.exercises[id]; });
+  DAYS.splice(dayIdx, 1);
+  persistDays();
+  saveState();
+  if (currentDayIdx >= DAYS.length) currentDayIdx = DAYS.length - 1;
+  render();
+}
+
+function addDay() {
+  const label = prompt('New muscle group / day name (e.g. "Arms", "Calves"):');
+  if (!label || !label.trim()) return;
+  const icon = prompt('Pick an emoji icon for this day (or leave blank for default):', '⭐') || '⭐';
+  const id = label.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_') + '_' + Date.now().toString(36).slice(-4);
+  const color = DAY_PALETTE[DAYS.length % DAY_PALETTE.length];
+  DAYS.push({ id, label: label.trim(), icon, color, exercises: [] });
+  persistDays();
+  currentDayIdx = DAYS.length - 1;
+  render();
+  alert(`Added "${label.trim()}". Now add exercises to it below.`);
+}
+
+function removeExercise(dayIdx, exId) {
+  const day = DAYS[dayIdx];
+  const ex = day.exercises.find(e => e.id === exId);
+  if (!confirm(`Remove "${ex.name}" and delete all its history? This cannot be undone.`)) return;
+  day.exercises = day.exercises.filter(e => e.id !== exId);
+  state.history = state.history.filter(h => h.exercise !== ex.name);
+  if (state.prs) state.prs = state.prs.filter(p => p.exercise !== ex.name);
+  if (state.exercises) delete state.exercises[ex.id];
+  persistDays();
+  saveState();
+  render();
+}
+
+function editExerciseConfig(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+
+  const s = getExState(ex);
+
+  if (ex.mode === 'weighted' || ex.mode === 'weighted_bw') {
+    const curMin = getSetsMin(ex), curMax = getSetsMax(ex);
+    const minInput = prompt(`Sets — MIN (your starting point, and where it resets after a weight increase). Current: ${curMin}`, curMin);
+    if (minInput === null) return;
+    const newMin = parseInt(minInput);
+    if (isNaN(newMin) || newMin < 1) { alert('Enter a valid number of sets (1 or more).'); return; }
+
+    const maxInput = prompt(`Sets — MAX (ceiling before weight increases). Current: ${curMax}`, curMax);
+    if (maxInput === null) return;
+    const newMax = Math.max(newMin, parseInt(maxInput) || newMin);
+
+    ex.setsMin = newMin;
+    ex.setsMax = newMax;
+    s.sets = Math.min(Math.max(s.sets, newMin), newMax); // keep current live sets within new range
+
+    const lowInput = prompt(`Custom rep range — LOW end. Current: ${ex.repLow}\n(Increment auto-adjusts: 2 reps/session if low end is 8+, 1 rep/session if 7 or below)`, ex.repLow);
+    if (lowInput !== null && !isNaN(parseInt(lowInput))) ex.repLow = Math.max(1, parseInt(lowInput));
+    const highInput = prompt(`Custom rep range — HIGH end (sets/weight increases once you hit this). Current: ${ex.repHigh}`, ex.repHigh);
+    if (highInput !== null && !isNaN(parseInt(highInput))) ex.repHigh = Math.max(ex.repLow, parseInt(highInput));
+
+    // Keep current live target within the new valid range
+    s.targetReps = Math.min(Math.max(s.targetReps, ex.repLow), ex.repHigh);
+  } else if (ex.mode === 'bodyweight') {
+    const setsInput = prompt(`Number of sets for "${ex.name}". Current: ${ex.sets}`, ex.sets);
+    if (setsInput === null) return;
+    const newSets = parseInt(setsInput);
+    if (isNaN(newSets) || newSets < 1) { alert('Enter a valid number of sets (1 or more).'); return; }
+    ex.sets = newSets;
+    const repsInput = prompt(`Default starting reps. Current: ${ex.startReps}`, ex.startReps);
+    if (repsInput !== null && !isNaN(parseInt(repsInput))) ex.startReps = Math.max(1, parseInt(repsInput));
+  } else if (ex.mode === 'timed') {
+    const secInput = prompt(`Default starting hold time (seconds). Current: ${ex.startSeconds}`, ex.startSeconds);
+    if (secInput !== null && !isNaN(parseInt(secInput))) ex.startSeconds = Math.max(1, parseInt(secInput));
+  }
+
+  delete liveSets[exId]; // force re-generation with new set count/targets next render
+  persistDays();
+  saveState();
+  alert(`Updated setup for "${ex.name}".`);
+  render();
+}
+
+function editRestTime(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  const input = prompt(`Rest BETWEEN SETS (seconds). Current: ${ex.rest}s`, ex.rest);
+  if (input === null) return;
+  const n = parseInt(input);
+  if (isNaN(n) || n <= 0) { alert('Enter a valid number of seconds.'); return; }
+  ex.rest = n;
+
+  const currentTransition = ex.transitionRest ?? TRANSITION_REST_SECONDS;
+  const input2 = prompt(`Rest AFTER finishing this exercise, before the next one (seconds). Current: ${currentTransition}s`, currentTransition);
+  if (input2 !== null) {
+    const n2 = parseInt(input2);
+    if (!isNaN(n2) && n2 >= 0) ex.transitionRest = n2;
+  }
+
+  persistDays();
+  alert(`Updated rest times for "${ex.name}": ${ex.rest}s between sets, ${ex.transitionRest ?? TRANSITION_REST_SECONDS}s before next exercise.`);
+  render();
+}
+
+function editExerciseProgress(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  const s = getExState(ex);
+
+  if (ex.mode === 'weighted') {
+    const current = WEIGHTS[s.tier];
+    const input = prompt(`Current dumbbell weight: ${current} lb.\nEnter new weight (one of ${WEIGHTS.join(', ')}):`, current);
+    if (input === null) return;
+    const n = parseInt(input);
+    const idx = WEIGHTS.indexOf(n);
+    if (idx === -1) { alert(`Must be one of: ${WEIGHTS.join(', ')}`); return; }
+    s.tier = idx;
+    const reps = prompt(`Target reps to start at this weight (usually ${ex.repLow}):`, ex.repLow);
+    if (reps !== null && !isNaN(parseInt(reps))) s.targetReps = Math.max(1, parseInt(reps));
+    s.failStreak = 0;
+  } else if (ex.mode === 'weighted_bw') {
+    const input = prompt(`Current belt weight: ${s.addedWeight} lb.\nEnter new belt weight (multiple of ${BELT_INCREMENT}):`, s.addedWeight);
+    if (input === null) return;
+    const n = parseInt(input);
+    if (isNaN(n) || n < 0) { alert('Enter a valid non-negative number.'); return; }
+    s.addedWeight = n;
+    const reps = prompt(`Target reps to start at this belt weight (usually ${ex.repLow}):`, ex.repLow);
+    if (reps !== null && !isNaN(parseInt(reps))) s.targetReps = Math.max(1, parseInt(reps));
+    s.failStreak = 0;
+  } else if (ex.mode === 'bodyweight') {
+    const input = prompt(`Current target reps: ${s.targetReps}.\nEnter new target reps:`, s.targetReps);
+    if (input === null) return;
+    const n = parseInt(input);
+    if (isNaN(n) || n < 1) { alert('Enter a valid number.'); return; }
+    s.targetReps = n;
+    s.failStreak = 0;
+  } else if (ex.mode === 'timed') {
+    const input = prompt(`Current target hold: ${s.targetSeconds}s.\nEnter new target seconds:`, s.targetSeconds);
+    if (input === null) return;
+    const n = parseInt(input);
+    if (isNaN(n) || n < 1) { alert('Enter a valid number.'); return; }
+    s.targetSeconds = n;
+    s.failStreak = 0;
+  }
+  saveState();
+  alert(`Updated. All future sessions for "${ex.name}" will project from this new baseline.`);
+  render();
+}
+
+function onManageModeChange() {
+  const mode = document.getElementById('newExMode').value;
+  document.getElementById('grpRepRange').style.display = (mode === 'weighted' || mode === 'weighted_bw') ? 'block' : 'none';
+  document.getElementById('grpStartReps').style.display = (mode === 'bodyweight') ? 'block' : 'none';
+  document.getElementById('grpStartSeconds').style.display = (mode === 'timed') ? 'block' : 'none';
+}
+
+function addExercise(dayIdx) {
+  const name = document.getElementById('newExName').value.trim();
+  const mode = document.getElementById('newExMode').value;
+  const sets = parseInt(document.getElementById('newExSets').value) || 3;
+  const rest = parseInt(document.getElementById('newExRest').value) || 90;
+  if (!name) { alert('Enter an exercise name.'); return; }
+
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0,30) + '_' + Date.now().toString(36).slice(-4);
+  const ex = { id, name, mode, sets, rest };
+
+  if (mode === 'weighted' || mode === 'weighted_bw') {
+    ex.repLow = parseInt(document.getElementById('newExRepLow').value) || DEFAULT_REP_LOW;
+    ex.repHigh = parseInt(document.getElementById('newExRepHigh').value) || DEFAULT_REP_HIGH;
+    ex.setsMin = sets;
+    ex.setsMax = sets + 2; // default headroom; editable anytime via 🔧 Sets/Reps
+  } else if (mode === 'bodyweight') {
+    ex.startReps = parseInt(document.getElementById('newExStartReps').value) || 5;
+  } else if (mode === 'timed') {
+    ex.startSeconds = parseInt(document.getElementById('newExStartSeconds').value) || 30;
+  }
+
+  DAYS[dayIdx].exercises.push(ex);
+  persistDays();
+  document.getElementById('newExName').value = '';
+  render();
+  alert(`Added "${name}" to ${DAYS[dayIdx].label}.`);
+}
+
+function renderManage() {
+  const day = DAYS[currentDayIdx];
+  const dayTabs = DAYS.map((d,i) =>
+    `<div class="tab" style="${i===currentDayIdx?`background:${d.color};color:#fff;`:''}" onclick="selectDay(${i}); setView('manage')">${d.icon} ${d.label}</div>`
+  ).join('');
+
+  const exList = day.exercises.map((ex, i) => `
+    <div class="histitem row">
+      <span>${ex.name} <span class="badge">${ex.mode}</span></span>
+      <span style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
+        <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, 1)" ${i===day.exercises.length-1?'disabled style="opacity:.35;"':''}>↓</button>
+        <button class="btn small secondary" onclick="renameExercise('${ex.id}')">✏️ Rename</button>
+        <button class="btn small secondary" onclick="editExerciseConfig('${ex.id}')">🔧 Sets/Reps</button>
+        <button class="btn small secondary" onclick="editExerciseProgress('${ex.id}')">📈 Progress</button>
+        <button class="btn small secondary" onclick="editRestTime('${ex.id}')">⏱ Rest</button>
+        <button class="btn small secondary" onclick="removeExercise(${currentDayIdx}, '${ex.id}')">🗑 Remove</button>
+      </span>
+    </div>`).join('') || `<div class="empty">No exercises on this day.</div>`;
+
+  return `<div class="tabs">${dayTabs}</div>
+  <main>
+    <div class="card">
+      <h3>🎨 Appearance</h3>
+      <div class="tabs" style="padding:0; background:transparent; margin-top:4px;">
+        <div class="tab" style="${getTheme()==='dark'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('dark')">🌙 Dark</div>
+        <div class="tab" style="${getTheme()==='light'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('light')">☀️ Light</div>
+      </div>
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean, professional look for daytime use.</div>
+    </div>
+    <div class="card">
+      <div class="row"><h3>Manage Days</h3><button class="btn small" onclick="addDay()">+ Add Day</button></div>
+      ${DAYS.map((d,i) => `
+        <div class="histitem row">
+          <span>${d.icon} ${d.label} <span class="badge">${d.exercises.length} exercises</span></span>
+          <span style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn small secondary" onclick="moveDay(${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
+            <button class="btn small secondary" onclick="moveDay(${i}, 1)" ${i===DAYS.length-1?'disabled style="opacity:.35;"':''}>↓</button>
+            <button class="btn small secondary" onclick="renameDay(${i})">✏️ Rename</button>
+            <button class="btn small secondary" onclick="removeDay(${i})">🗑 Delete</button>
+          </span>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <h3>Exercises — ${day.label}</h3>
+      ${exList}
+    </div>
+    <div class="card">
+      <h3>+ Add Exercise to ${day.label}</h3>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <input id="newExName" type="text" placeholder="Exercise name">
+        <select id="newExMode" onchange="onManageModeChange()">
+          <option value="weighted">Weighted (dumbbell double progression)</option>
+          <option value="weighted_bw">Weighted bodyweight (belt, e.g. pull-ups)</option>
+          <option value="bodyweight">Bodyweight only (reps)</option>
+          <option value="timed">Timed hold (e.g. plank)</option>
+        </select>
+        <div>Sets: <input id="newExSets" type="number" value="3" style="width:60px;"></div>
+        <div>Rest (seconds): <input id="newExRest" type="number" value="90" style="width:70px;"></div>
+        <div id="grpRepRange">
+          Rep range: <input id="newExRepLow" type="number" value="8" style="width:50px;"> to
+          <input id="newExRepHigh" type="number" value="12" style="width:50px;">
+          <div class="meta" style="margin:4px 0 0;">Increment auto-set: 2 reps/session if low end is 8+, 1 rep/session if 7 or below</div>
+        </div>
+        <div id="grpStartReps" style="display:none;">Starting reps: <input id="newExStartReps" type="number" value="5" style="width:50px;"></div>
+        <div id="grpStartSeconds" style="display:none;">Starting seconds: <input id="newExStartSeconds" type="number" value="30" style="width:60px;"></div>
+        <button class="btn" onclick="addExercise(${currentDayIdx})">Add Exercise</button>
+      </div>
+    </div>
+    <div class="card" style="border-color:rgba(200,140,30,.45);">
+      <h3 style="color:#ffcb4a;">🧪 Test Mode</h3>
+      <div class="meta">${isTestMode()
+        ? 'You are currently in test mode. Everything you do here is isolated from your real data.'
+        : 'Try anything — logging, editing exercises, resetting data — on an isolated copy, without touching your real progress.'}</div>
+      ${isTestMode()
+        ? `<div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+             <button class="btn small" style="background:#8a6a1a;" onclick="disableTestMode()">Exit Test Mode</button>
+             <button class="btn small secondary" onclick="resetTestData()">Reset Test Data</button>
+           </div>`
+        : `<button class="btn small" style="background:#8a6a1a; margin-top:8px;" onclick="enableTestMode()">Enable Test Mode</button>`}
+    </div>
+    <div class="card" style="border-color:rgba(216,67,74,.45);">
+      <h3 style="color:#ff6b6b;">⚠️ Danger Zone</h3>
+      <div class="meta">Permanently deletes all workout history, progression, PRs, and streaks. Your exercise list is kept.</div>
+      <button class="btn small" style="background:#8a2c2c; margin-top:8px;" onclick="resetAllData()">Reset All Data</button>
+    </div>
+  </main>`;
+}
+
+function renderHistory() {
+  const backupBar = `<div class="card">
+    <div class="row">
+      <button class="btn small" onclick="shareBackup()">📤 Share / Save to Drive</button>
+      <button class="btn small secondary" onclick="exportBackup()">⬇ Download</button>
+      <label class="btn small secondary" style="margin:0;">⬆ Import
+        <input type="file" accept="application/json" style="display:none" onchange="importBackup(event)">
+      </label>
+      <button class="btn small secondary" onclick="editBackupFolder()">📁 Folder</button>
+    </div>
+    <div class="meta" style="margin:8px 0 0;">Auto-backups save to: Downloads/${getBackupFolderName()}/</div>
+  </div>`;
+  if (state.history.length === 0) return `<main>${backupBar}${renderCalendar()}<div class="empty">No workouts logged yet.</div></main>`;
+  const items = [...state.history].reverse().slice(0,100).map(h => {
+    const date = new Date(h.date).toLocaleString();
+    const setsStr = h.sets.join(', ');
+    return `<div class="histitem">
+      <strong>${h.exercise}</strong> <span class="badge">${h.day}</span><br>
+      ${h.weight ? h.weight+' lb · ' : ''}sets: ${setsStr}<br>
+      <span style="color:var(--text-faint)">${date}</span>
+    </div>`;
+  }).join('');
+  const seenSessions = new Map();
+  state.history.forEach(h => {
+    const dk = getEntryDateKey(h);
+    const num = getEntrySessionNum(h);
+    const key = sessionKey(dk, h.day, num);
+    if (!seenSessions.has(key)) seenSessions.set(key, { dateKey: dk, dayLabel: h.day, sessionNum: num });
+  });
+  const recentSessions = [...seenSessions.values()].slice(-5).reverse();
+  const durationsHtml = recentSessions.map(({dateKey, dayLabel, sessionNum}) => {
+    const mins = getSessionDuration(dateKey, dayLabel, sessionNum);
+    const label = sessionNum > 1 ? `${dayLabel} (session ${sessionNum})` : dayLabel;
+    return `<div class="histitem">${dateKey} · ${label}: ${mins != null ? mins+' min' : 'single log, no duration'}</div>`;
+  }).join('');
+  return `<main>${backupBar}
+    ${renderCalendar()}
+    <div class="card"><h3>⏱ Recent Session Lengths</h3>${durationsHtml}</div>
+    <div class="card">${items}</div>
+  </main>`;
+}
+
+function getBackupFolderName() {
+  return (state.meta && state.meta.backupFolder) || 'LiftLog';
+}
+
+function editBackupFolder() {
+  const current = getBackupFolderName();
+  const input = prompt(`Backup folder path (inside your phone's Downloads folder). Use / for nested folders, e.g. "Fitness/LiftLog".\nCurrent: Downloads/${current}/`, current);
+  if (input === null) return;
+  const clean = input.trim()
+    .replace(/\.\./g, '')       // block path traversal
+    .replace(/[\\:*?"<>|]/g, '') // strip characters invalid in folder names (slash is allowed, for nesting)
+    .replace(/^\/+|\/+$/g, '')  // trim leading/trailing slashes
+    .replace(/\/+/g, '/');      // collapse repeated slashes
+  if (!clean) { alert('Enter a valid folder name.'); return; }
+  state.meta = state.meta || {};
+  state.meta.backupFolder = clean;
+  saveState();
+  alert(`Backups will now attempt to save to Downloads/${clean}/\nNote: on some Chrome versions, nested subfolders may not be created automatically — if that happens, the file will just land directly in Downloads instead. Worth checking once on your phone after changing this.`);
+}
+
+function makeBackupFile() {
+  const stamp = new Date().toISOString().slice(0,10);
+  const json = JSON.stringify(state, null, 2);
+  return new File([json], `${getBackupFolderName()}/liftlog-backup-${stamp}.json`, { type: 'application/json' });
+}
+
+function exportBackup() {
+  const file = makeBackupFile();
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url; a.download = file.name;
+  a.click();
+  URL.revokeObjectURL(url);
+  state.meta = state.meta || {};
+  state.meta.lastBackup = new Date().toISOString();
+  saveState();
+}
+
+async function shareBackup() {
+  const file = makeBackupFile();
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: 'LiftLog Backup' });
+      state.meta = state.meta || {};
+      state.meta.lastBackup = new Date().toISOString();
+      saveState();
+      return;
+    } catch (e) { /* user cancelled or share failed, fall back below */ }
+  }
+  alert('Direct share not supported on this browser — using download instead. Open the file and use "Save to Drive" from there.');
+  exportBackup();
+}
+
+function silentAutoBackup() {
+  try {
+    const file = makeBackupFile();
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url; a.download = file.name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    state.meta = state.meta || {};
+    state.meta.lastBackup = new Date().toISOString();
+    saveState();
+  } catch (e) { /* fail silently, don't interrupt the workout */ }
+}
+
+function maybePromptBackup() {
+  state.meta = state.meta || {};
+  const last = state.meta.lastBackup ? new Date(state.meta.lastBackup) : null;
+  const hoursSince = last ? (Date.now() - last) / 3600000 : Infinity;
+  if (hoursSince >= 20) silentAutoBackup(); // effectively once per workout day, fully silent
+}
+
+function importBackup(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const imported = JSON.parse(reader.result);
+      if (!imported.exercises || !imported.history) throw new Error('bad format');
+      if (confirm('Import will replace all current data. Continue?')) {
+        state = imported;
+        saveState();
+        render();
+        alert('Backup restored.');
+      }
+    } catch (e) {
+      alert('Invalid backup file.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ---------- INIT ----------
+applyTheme(getTheme());
+if (isTestMode()) {
+  const banner = document.getElementById('testModeBanner');
+  banner.style.display = 'block';
+  banner.textContent = '🧪 TEST MODE — changes here do NOT affect your real data';
+}
+render();
+requestWakeLock();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  });
+}
+</script>
+</body>
+</html>
