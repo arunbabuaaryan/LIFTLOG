@@ -661,29 +661,70 @@ let progressExerciseId = null;
 let chartMetric = 'e1rm'; // 'e1rm' | 'weight' | 'volume'
 let chartRange = 'all'; // 'all' | '90' | '30' (days)
 
+// Content-anchored scroll preservation: instead of remembering a raw pixel
+// offset (which breaks when switching to a day with more/fewer exercises and
+// therefore a different page length), we remember WHICH card was at the top
+// of the viewport and how far scrolled into it we were, then restore relative
+// to that same card after the switch. This keeps you looking at the same
+// section (e.g. the chart) even if everything above it changed height.
+const PROGRESS_SCROLL_ANCHORS = ['pcard-overview','pcard-prs','pcard-balance','pcard-bests','pcard-duration','pcard-progression'];
+
+function captureScrollAnchor() {
+  const HEADER_BUFFER = 90; // roughly the height of the sticky header/tab bar
+  let best = null;
+  for (const id of PROGRESS_SCROLL_ANCHORS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const top = el.getBoundingClientRect().top;
+    if (top <= HEADER_BUFFER) {
+      best = { id, offsetFromTop: top }; // keep overwriting; last match = closest to top
+    } else if (best === null) {
+      // Nothing has scrolled past the header yet — anchor to the first card we can find
+      best = { id, offsetFromTop: top };
+      break;
+    }
+  }
+  return best;
+}
+
+function restoreScrollAnchor(anchor) {
+  if (!anchor) return;
+  const el = document.getElementById(anchor.id);
+  if (!el) return;
+  const newTop = el.getBoundingClientRect().top;
+  const delta = newTop - anchor.offsetFromTop;
+  window.scrollTo(0, window.scrollY + delta);
+}
+
+function renderPreservingScroll() {
+  const anchor = captureScrollAnchor();
+  render();
+  restoreScrollAnchor(anchor);
+}
+
 function setChartMetric(m) {
   chartMetric = m;
   renderCharts();
   // Only the chart/toggle need refreshing, but the toggle pills' active state
   // lives in the full view markup, so a light re-render keeps them in sync.
-  render();
+  renderPreservingScroll();
 }
 
 function setChartRange(r) {
   chartRange = r;
   renderCharts();
-  render();
+  renderPreservingScroll();
 }
 
 function selectProgressDay(i) {
   progressDayIdx = i;
   progressExerciseId = null; // reset so it defaults to the first exercise of the new day
-  render();
+  renderPreservingScroll();
 }
 
 function selectProgressExercise(exId) {
   progressExerciseId = exId;
-  render();
+  renderPreservingScroll();
 }
 let view = 'workout';
 let liveSets = {}; // exerciseId -> array of {reps or seconds, done}
@@ -1404,7 +1445,7 @@ function renderProgress() {
   }).join('');
 
   return `<main>
-    <div class="card">
+    <div class="card" id="pcard-overview">
       <h3>📊 Overview</h3>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px;">
         <div><div class="livectrl-label">Total Sessions</div><div style="font-size:22px; font-weight:800;">${overview.totalSessions}</div></div>
@@ -1419,23 +1460,23 @@ function renderProgress() {
         <div style="display:flex; align-items:flex-end; gap:6px; height:60px;">${monthlyBarsHtml}</div>
       </div>
     </div>
-    <div class="card">
+    <div class="card" id="pcard-prs">
       <h3>🏆 Recent PRs</h3>
       ${prs}
     </div>
-    <div class="card">
+    <div class="card" id="pcard-balance">
       <h3>⚖️ Muscle-Group Balance <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(last 30 days)</span></h3>
       ${balanceHtml}
     </div>
-    <div class="card">
+    <div class="card" id="pcard-bests">
       <h3>🥇 ${progDay.icon} ${progDay.label} — All-Time Bests</h3>
       ${bestsHtml}
     </div>
-    <div class="card">
+    <div class="card" id="pcard-duration">
       <h3>⏱ Session Time by Day</h3>
       ${durationByDay}
     </div>
-    <div class="card" style="padding:0; overflow:hidden;">
+    <div class="card" id="pcard-progression" style="padding:0; overflow:hidden;">
       <div class="tabs" id="progressDayTabs" style="border-radius:16px 16px 0 0;">${progTabs}</div>
       <div style="padding:16px;">
         <h3 style="margin-bottom:10px;">${progDay.icon} ${progDay.label} — Progression</h3>
