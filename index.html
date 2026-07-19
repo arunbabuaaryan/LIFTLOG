@@ -21,6 +21,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="apple-touch-startup-image" href="icon-512-splash.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root {
     --bg: #0a0b10;
@@ -1658,14 +1659,15 @@ function renderCalendar() {
 }
 
 function resetAllData() {
-  const confirmText = prompt('This will permanently delete ALL workout history, progression, PRs, and streaks (your exercise list stays intact). Type RESET to confirm:');
+  const confirmText = prompt('This will permanently delete ALL workout history, progression, PRs, and streaks (your exercise list and Google Drive connection stay intact). Type RESET to confirm:');
   if (confirmText !== 'RESET') { alert('Cancelled — nothing was deleted.'); return; }
   const keepDays = DAYS;
-  state = { exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays };
+  const keepDriveSync = state.driveSync;
+  state = { exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays, driveSync: keepDriveSync };
   saveState();
   liveSets = {};
   currentDayIdx = 0;
-  alert('All data reset. Exercise list was kept.');
+  alert('All data reset. Exercise list and Drive connection were kept.');
   setView('workout');
 }
 
@@ -2017,10 +2019,183 @@ function renderManage() {
   </main>`;
 }
 
+// ---------- GOOGLE DRIVE SYNC ----------
+// Uses Google Identity Services (client-side token flow) + the Drive API's
+// narrow 'drive.file' scope — the app can only ever see files it creates
+// itself, nothing else in your Drive. Because this is a pure browser app
+// with no backend server, Google does not issue a long-lived refresh token
+// here (that's a deliberate security limitation of client-side apps, not
+// something any app can work around). Instead, every sync attempts a SILENT
+// token request first — if your phone's browser is still signed into the
+// Google account you connected, this succeeds with no visible prompt at
+// all. You'd only see Google's consent screen again if that browser signs
+// out of Google entirely, which is uncommon on a personal phone.
+const GOOGLE_CLIENT_ID = '160168494561-93iqlvtqmtntdm2vudcgs6cvtddd3vgq.apps.googleusercontent.com';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_BACKUP_FILENAME = 'liftlog-backup.json';
+
+let driveTokenClient = null;
+let driveAccessToken = null; // in-memory only, never persisted — re-acquired each session
+
+function getDriveSyncState() {
+  state.driveSync = state.driveSync || { connected: false, email: null, fileId: null, lastSync: null };
+  return state.driveSync;
+}
+
+function initDriveTokenClient(callback) {
+  if (!window.google || !google.accounts || !google.accounts.oauth2) {
+    alert('Google sign-in is still loading — try again in a second.');
+    return null;
+  }
+  return google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: DRIVE_SCOPE,
+    callback: callback
+  });
+}
+
+// First-time connect: shows Google's account picker + consent screen. This
+// is the one moment you pick which Google account backups go to.
+function connectGoogleDrive() {
+  const client = initDriveTokenClient(async (resp) => {
+    if (resp.error) { alert('Google Drive connection failed or was cancelled.'); return; }
+    driveAccessToken = resp.access_token;
+    await onDriveTokenAcquired();
+  });
+  if (client) client.requestAccessToken({ prompt: 'consent' });
+}
+
+// Attempts to get a fresh access token without showing any UI. Used for
+// every sync after the first one. Resolves to true/false rather than
+// throwing, so callers can decide what to do on failure.
+function silentDriveAuth() {
+  return new Promise((resolve) => {
+    const client = initDriveTokenClient((resp) => {
+      if (resp.error) { resolve(false); return; }
+      driveAccessToken = resp.access_token;
+      resolve(true);
+    });
+    if (!client) { resolve(false); return; }
+    try { client.requestAccessToken({ prompt: '' }); }
+    catch (e) { resolve(false); }
+  });
+}
+
+async function onDriveTokenAcquired() {
+  try {
+    const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${driveAccessToken}` }
+    });
+    const info = await res.json();
+    const ds = getDriveSyncState();
+    ds.connected = true;
+    ds.email = info.email || null;
+    saveState();
+  } catch (e) { /* email is cosmetic only, don't block sync on this */ }
+  await driveSyncNow();
+  render();
+}
+
+function disconnectGoogleDrive() {
+  if (!confirm('Disconnect Google Drive? Local backups (Downloads folder) will keep working as before.')) return;
+  const ds = getDriveSyncState();
+  ds.connected = false;
+  ds.email = null;
+  ds.fileId = null;
+  driveAccessToken = null;
+  saveState();
+  render();
+}
+
+// Finds the existing backup file (by its stored Drive file ID, or by
+// searching by name as a fallback for a fresh session) so every sync
+// overwrites the SAME file — zero accumulation, unlike local downloads.
+async function findOrCreateDriveFileId() {
+  const ds = getDriveSyncState();
+  if (ds.fileId) return ds.fileId;
+
+  const query = encodeURIComponent(`name='${DRIVE_BACKUP_FILENAME}' and trashed=false`);
+  const listRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&spaces=drive&fields=files(id,name)`, {
+    headers: { Authorization: `Bearer ${driveAccessToken}` }
+  });
+  const listData = await listRes.json();
+  if (listData.files && listData.files.length > 0) {
+    ds.fileId = listData.files[0].id;
+    saveState();
+    return ds.fileId;
+  }
+  return null; // doesn't exist yet — driveSyncNow() will create it
+}
+
+async function driveSyncNow(silent) {
+  const ds = getDriveSyncState();
+  if (!ds.connected) return false;
+
+  if (!driveAccessToken) {
+    const ok = await silentDriveAuth();
+    if (!ok) {
+      // Silent refresh failed — the Google session itself likely needs a
+      // fresh sign-in. Only interrupt with a visible prompt if this sync
+      // was manually triggered; never during a silent background backup.
+      if (!silent) connectGoogleDrive();
+      return false;
+    }
+  }
+
+  try {
+    const json = JSON.stringify(state, null, 2);
+    const fileId = await findOrCreateDriveFileId();
+    const metadata = { name: DRIVE_BACKUP_FILENAME, mimeType: 'application/json' };
+    const boundary = 'liftlog_boundary';
+    const body =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\nContent-Type: application/json\r\n\r\n${json}\r\n--${boundary}--`;
+
+    const url = fileId
+      ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`
+      : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+    const method = fileId ? 'PATCH' : 'POST';
+
+    const res = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${driveAccessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+      body
+    });
+    if (!res.ok) throw new Error('Drive API error ' + res.status);
+    const data = await res.json();
+    if (!fileId && data.id) { ds.fileId = data.id; }
+    ds.lastSync = new Date().toISOString();
+    saveState();
+    return true;
+  } catch (e) {
+    return false; // fail silently for background syncs; manual button shows its own alert below
+  }
+}
+
+async function manualDriveSyncNow() {
+  const ok = await driveSyncNow(false);
+  render();
+  if (ok) alert('✅ Synced to Google Drive.');
+  else alert('Sync failed or needs re-connection — try "Connect Google Drive" again.');
+}
+
 function renderHistory() {
+  const ds = getDriveSyncState();
+  const driveSection = ds.connected
+    ? `<div class="row" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+         <span class="meta" style="margin:0;">☁️ Synced as ${ds.email || 'connected account'}${ds.lastSync ? ' · last: '+new Date(ds.lastSync).toLocaleString() : ''}</span>
+       </div>
+       <div class="row" style="margin-top:8px;">
+         <button class="btn small secondary" onclick="manualDriveSyncNow()">🔄 Sync now</button>
+         <button class="btn small secondary" onclick="disconnectGoogleDrive()">Disconnect</button>
+       </div>`
+    : `<div class="row" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+         <button class="btn small" onclick="connectGoogleDrive()">☁️ Connect Google Drive</button>
+       </div>`;
+
   const backupBar = `<div class="card">
     <div class="row">
-      <button class="btn small" onclick="shareBackup()">📤 Share / Save to Drive</button>
+      <button class="btn small secondary" onclick="shareBackup()">📤 Share file</button>
       <button class="btn small secondary" onclick="exportBackup()">⬇ Download</button>
       <label class="btn small secondary" style="margin:0;">⬆ Import
         <input type="file" accept="application/json" style="display:none" onchange="importBackup(event)">
@@ -2028,6 +2203,7 @@ function renderHistory() {
       <button class="btn small secondary" onclick="editBackupFolder()">📁 Folder</button>
     </div>
     <div class="meta" style="margin:8px 0 0;">Auto-backups save to: Downloads/${getBackupFolderName()}/</div>
+    ${driveSection}
   </div>`;
   if (state.history.length === 0) return `<main>${backupBar}${renderCalendar()}<div class="empty">No workouts logged yet.</div></main>`;
   const items = [...state.history].reverse().slice(0,100).map(h => {
@@ -2133,7 +2309,11 @@ function maybePromptBackup() {
   state.meta = state.meta || {};
   const last = state.meta.lastBackup ? new Date(state.meta.lastBackup) : null;
   const hoursSince = last ? (Date.now() - last) / 3600000 : Infinity;
-  if (hoursSince >= 20) silentAutoBackup(); // effectively once per workout day, fully silent
+  if (hoursSince >= 20) {
+    silentAutoBackup(); // effectively once per workout day, fully silent
+    const ds = getDriveSyncState();
+    if (ds.connected) driveSyncNow(true).then(() => render());
+  }
 }
 
 function importBackup(event) {
@@ -2145,7 +2325,9 @@ function importBackup(event) {
       const imported = JSON.parse(reader.result);
       if (!imported.exercises || !imported.history) throw new Error('bad format');
       if (confirm('Import will replace all current data. Continue?')) {
+        const keepDriveSync = state.driveSync; // this device's Drive connection isn't part of the portable backup
         state = imported;
+        state.driveSync = keepDriveSync;
         saveState();
         render();
         alert('Backup restored.');
