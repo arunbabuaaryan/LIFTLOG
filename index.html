@@ -135,6 +135,81 @@
     to { opacity: 1; transform: translateY(0); }
   }
   .card { animation: fadeSlide .3s cubic-bezier(.2,.7,.3,1); }
+
+  /* ---- Focus Mode ---- */
+  .focus-toggle {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700;
+    color: var(--text-dim); background: var(--surface-raised); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 20px; margin-bottom: 12px; letter-spacing: -0.01em;
+    transition: background .15s ease, color .15s ease;
+  }
+  .focus-toggle:active { transform: scale(.96); background: var(--control-bg); }
+  .card-focus {
+    border-width: 1.5px; border-color: var(--accent); box-shadow: 0 2px 4px rgba(0,0,0,.15), 0 10px 32px rgba(91,127,255,.16);
+    position: relative;
+  }
+  .focus-eyebrow {
+    font-size: 10.5px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 8px;
+  }
+  .progress-rail {
+    display: flex; gap: 6px; padding: 2px 2px 14px; overflow-x: auto;
+  }
+  .railstop {
+    width: 26px; height: 26px; min-width: 26px; border-radius: 50%; background: var(--surface-raised);
+    border: 1.5px solid var(--border-strong); color: var(--text-faint); font-size: 12px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; transition: all .2s ease;
+  }
+  .railstop.done { background: var(--success-bg); border-color: var(--success-border); color: var(--success); }
+  .railstop.active {
+    background: var(--rail-color, var(--accent)); border-color: var(--rail-color, var(--accent));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--rail-color, var(--accent)) 25%, transparent);
+    transform: scale(1.15);
+  }
+  .upnext-row {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-top: -2px; margin-bottom: 12px;
+    background: var(--surface); border: 1px dashed var(--border-strong); border-radius: 13px;
+    opacity: .72; font-size: 13px; transition: opacity .15s ease;
+  }
+  .upnext-row:active { opacity: 1; }
+  .upnext-label { font-size: 10.5px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: var(--text-faint); }
+  .upnext-name { flex: 1; font-weight: 600; color: var(--text-dim); }
+  .upnext-arrow { color: var(--text-faint); }
+  .completed-collapse {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 13px;
+    padding: 10px 14px; margin-bottom: 12px; font-size: 13px;
+  }
+  .completed-collapse summary {
+    font-weight: 700; color: var(--success); cursor: pointer; list-style: none;
+  }
+  .completed-collapse summary::-webkit-details-marker { display: none; }
+  .completed-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0 0; color: var(--text-dim); font-size: 12.5px;
+  }
+
+  /* ---- Workout complete modal ---- */
+  .win-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 220;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    animation: confirmFadeIn .2s ease;
+  }
+  .win-modal {
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: 22px;
+    padding: 28px 24px 24px; max-width: 340px; width: 100%; text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,.4); animation: winPop .35s cubic-bezier(.2,.9,.3,1.2);
+  }
+  @keyframes winPop { from { opacity: 0; transform: scale(.85) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+  .win-emoji { font-size: 46px; line-height: 1; margin-bottom: 6px; }
+  .win-title { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 4px; }
+  .win-sub { font-size: 13.5px; color: var(--text-dim); margin-bottom: 18px; }
+  .win-stats { display: flex; gap: 10px; margin-bottom: 20px; }
+  .win-stat {
+    flex: 1; background: var(--surface-raised); border-radius: 14px; padding: 12px 6px;
+    border: 1px solid var(--border);
+  }
+  .win-stat-val { font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
+  .win-stat-label { font-size: 10.5px; color: var(--text-faint); font-weight: 600; text-transform: uppercase; letter-spacing: .4px; margin-top: 2px; }
   .nav {
     position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--surface);
     border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom, 0);
@@ -382,6 +457,27 @@ function applyTheme(t) {
 function setTheme(t) {
   localStorage.setItem(THEME_KEY, t);
   applyTheme(t);
+  render();
+}
+
+// ---------- WORKOUT FLOW CONFIG ----------
+// Central place to tune the guided-workout experience without hunting through
+// render logic. Nothing below reads exercise-specific data — it only shapes
+// timing/behavior, so it stays valid no matter how DAYS/exercises change.
+const WORKOUT_FLOW = {
+  autoAdvanceDelayMs: 550,   // pause after an exercise turns green before the view advances
+  upNextPreviewCount: 1,     // how many upcoming exercises to preview under the active card
+  showCompletionModal: true, // show the full-screen summary when a workout group is finished
+};
+
+// Focus Mode: guided, one-exercise-at-a-time flow (default). List Mode shows
+// the classic full scrolling list. Stored per-device like the theme preference.
+function getFocusMode() {
+  const v = localStorage.getItem('liftlog_focus_mode');
+  return v === null ? true : v === '1';
+}
+function setFocusMode(on) {
+  localStorage.setItem('liftlog_focus_mode', on ? '1' : '0');
   render();
 }
 
@@ -769,12 +865,20 @@ function getTodayCompletionPct(day) {
 
 // ---------- VIEW STATE ----------
 function computeDefaultDayIdx() {
-  if (state.history.length === 0) return 0;
+  if (state.history.length === 0 || DAYS.length === 0) return 0;
   const last = state.history[state.history.length - 1];
   const lastDayIdx = DAYS.findIndex(d => d.label === last.day);
   if (lastDayIdx === -1) return 0;
-  if (dateStr(last.date) === dateStr(new Date())) return lastDayIdx; // continue today's in-progress session
-  return (lastDayIdx + 1) % DAYS.length; // move to next day in the rotation
+  const loggedToday = getEntryDateKey(last) === dateStr(new Date());
+  if (loggedToday) {
+    // Still mid-session (something left to do today) — stay put so the app
+    // opens right back where the workout was left off.
+    if (getTodayCompletionPct(DAYS[lastDayIdx]) < 100) return lastDayIdx;
+  }
+  // Otherwise the last group is done (or wasn't today) — advance to whichever
+  // group comes next in rotation order, so the app always opens on the next
+  // workout that's due rather than repeating one already finished.
+  return (lastDayIdx + 1) % DAYS.length;
 }
 let currentDayIdx = computeDefaultDayIdx();
 let progressDayIdx = 0;
@@ -919,7 +1023,36 @@ function setView(v) {
   render();
 }
 
-function selectDay(i) { currentDayIdx = i; liveSets = {}; render(); }
+// ---------- MISTAKE-PROOFING ----------
+// True if the given day has any exercise with real, unsaved input on it right
+// now — a set checked off, or a value nudged away from the default target.
+// Used to stop a stray tap/swipe from silently wiping work-in-progress.
+function hasUnsavedFocusProgress(dayIdx) {
+  const day = DAYS[dayIdx];
+  if (!day) return false;
+  return day.exercises.some(ex => {
+    const arr = liveSets[ex.id];
+    if (!arr) return false;
+    const target = getTargetValue(ex);
+    return arr.some(set => set.doneMark || set.value !== target);
+  });
+}
+
+function selectDay(i, afterSwitch) {
+  if (i === currentDayIdx) { if (afterSwitch) afterSwitch(); return; }
+  const doSwitch = () => { currentDayIdx = i; liveSets = {}; focusOverrideId = null; redoUnlocked = new Set(); render(); if (afterSwitch) afterSwitch(); };
+  if (hasUnsavedFocusProgress(currentDayIdx)) {
+    showConfirm({
+      title: 'Switch workout group?',
+      message: `You've checked off or adjusted sets on ${DAYS[currentDayIdx].label} that haven't been finished yet. Switching now discards that — it won't be saved.`,
+      confirmLabel: 'Switch anyway',
+      danger: true,
+      onConfirm: doSwitch
+    });
+  } else {
+    doSwitch();
+  }
+}
 
 // ---------- SWIPE NAVIGATION (switch day/group by swiping left/right) ----------
 let swipeStartX = null, swipeStartY = null, swipeStartTime = 0;
@@ -1198,6 +1331,26 @@ function targetLabel(ex) {
 function finishExercise(ex) {
   const arr = liveSets[ex.id];
   if (!arr) { alert('Nothing to log yet.'); return; }
+  // Catches the classic mis-tap: hitting Finish before checking off any sets
+  // would silently log the untouched default target as if it were actually
+  // performed. One extra tap here only fires when that's actually about to
+  // happen — the normal "check off sets, auto-advance" flow never sees it.
+  if (arr.every(x => !x.doneMark)) {
+    showConfirm({
+      title: 'Finish without checking off sets?',
+      message: `No sets are marked done for ${ex.name} yet. Finishing now logs the target — ${targetLabel(ex)} — as if that's exactly what you did. If that's not accurate, go back and check off your real sets first.`,
+      confirmLabel: 'Log it anyway',
+      danger: true,
+      onConfirm: () => finishExerciseConfirmed(ex)
+    });
+    return;
+  }
+  finishExerciseConfirmed(ex);
+}
+
+function finishExerciseConfirmed(ex) {
+  const arr = liveSets[ex.id];
+  if (!arr) { alert('Nothing to log yet.'); return; }
   const s = getExState(ex);
   const preFinishSnapshot = JSON.parse(JSON.stringify(s)); // for Undo
   const arrSnapshot = JSON.parse(JSON.stringify(arr)); // for Undo
@@ -1302,11 +1455,20 @@ function finishExercise(ex) {
   lastFinishUndo = { exId: ex.id, exName: ex.name, prevExState: preFinishSnapshot, arr: arrSnapshot, pushedEntry, prEntry };
   showUndoToast(`${ex.name}: ${statusMsg}${isPR ? ' 🏆 New PR!' : ''}`);
   delete liveSets[ex.id];
+  redoUnlocked.delete(ex.id); // back to locked/read-only after this log, even if this was a redo
+  if (focusOverrideId === ex.id) focusOverrideId = null; // let focus mode auto-advance to the next incomplete exercise
   maybePromptBackup();
   render();
   const dayHasMoreToday = DAYS[currentDayIdx].exercises.some(e => !isDoneToday(e.name, DAYS[currentDayIdx].label));
   if (dayHasMoreToday) {
     startRestTimer(ex.transitionRest ?? TRANSITION_REST_SECONDS); // rest before moving to the next exercise
+  } else {
+    // Every exercise in this group is done — the workout is complete.
+    const { anchorDate, sessionNum } = getActiveSession(DAYS[currentDayIdx].label);
+    const mins = getSessionDuration(anchorDate, DAYS[currentDayIdx].label, sessionNum);
+    if (WORKOUT_FLOW.showCompletionModal) {
+      setTimeout(() => showWorkoutCompleteModal(DAYS[currentDayIdx], mins), WORKOUT_FLOW.autoAdvanceDelayMs);
+    }
   }
   setTimeout(scrollToNextIncomplete, 100);
   if (leveledUp) {
@@ -1316,6 +1478,41 @@ function finishExercise(ex) {
       setTimeout(() => el.classList.remove('levelup'), 1000);
     }
   }
+}
+
+// Full-screen celebration shown the moment every exercise in a workout group
+// is finished — states the elapsed duration so the person never has to go
+// hunting for it in History. Purely presentational: reads already-computed
+// stats, writes nothing to state.
+function showWorkoutCompleteModal(day, mins) {
+  document.getElementById('winModalOverlay')?.remove();
+  const exCount = day.exercises.length;
+  const setCount = day.exercises.reduce((sum, ex) => {
+    const s = getExState(ex);
+    return sum + ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets);
+  }, 0);
+  const durationLabel = mins != null ? formatDuration(mins) : '—';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'win-overlay';
+  overlay.id = 'winModalOverlay';
+  overlay.innerHTML = `
+    <div class="win-modal">
+      <div class="win-emoji">🎉</div>
+      <h3 class="win-title">${escapeHtml(day.label)} complete!</h3>
+      <div class="win-sub">Nice work — every exercise logged.</div>
+      <div class="win-stats">
+        <div class="win-stat"><div class="win-stat-val">${durationLabel}</div><div class="win-stat-label">Duration</div></div>
+        <div class="win-stat"><div class="win-stat-val">${exCount}</div><div class="win-stat-label">Exercises</div></div>
+        <div class="win-stat"><div class="win-stat-val">${setCount}</div><div class="win-stat-label">Sets</div></div>
+      </div>
+      <button class="btn" style="width:100%;" id="winModalCloseBtn">Nice!</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#winModalCloseBtn').onclick = close;
+  if (navigator.vibrate) navigator.vibrate([40, 60, 40, 60, 90]);
 }
 
 // ---------- REST TIMER ----------
@@ -1413,6 +1610,134 @@ function scrollActiveTabsIntoView() {
   }
 }
 
+// Renders one exercise's full interactive card. Used by both List Mode (every
+// exercise, one after another) and Focus Mode (just the single active one),
+// so the actual set-logging UI only exists in one place. `highlighted` adds
+// the "this is the one to do right now" styling used in Focus Mode.
+function renderExerciseCard(ex, day, { highlighted = false } = {}) {
+  const doneToday = isDoneToday(ex.name, day.label);
+
+  // Once an exercise is logged for today, lock it to a compact, read-only
+  // summary instead of leaving the full Finish/Skip controls live. This is
+  // what stops a stray tap in the full list from quietly creating a second,
+  // duplicate log entry for the same exercise. "Redo" is one deliberate,
+  // confirmed step away if a real correction is needed.
+  if (doneToday && !redoUnlocked.has(ex.id)) {
+    const logged = getTodayLoggedEntry(ex, day);
+    const loggedLabel = logged
+      ? `${logged.sets.join(', ')}${logged.weight != null ? ' @ ' + logged.weight + ' lb' : ''}${logged.skipped ? ' (skipped)' : ''}`
+      : targetLabel(ex);
+    return `<div class="card done-today card-locked" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
+      <div class="row">
+        <h3>✅ ${escapeHtml(ex.name)}</h3>
+        <button class="btn small secondary" onclick="unlockExerciseForRedo('${ex.id}')">↻ Redo</button>
+      </div>
+      <div class="meta" style="margin-bottom:0;">Logged: ${escapeHtml(loggedLabel)}</div>
+    </div>`;
+  }
+
+  const s = getExState(ex);
+  const arr = ensureLive(ex);
+  const step = ex.mode === 'timed' ? 5 : 1;
+  const setsHtml = arr.map((set, i) => {
+    const isChanged = recentlyChangedSet && recentlyChangedSet.exId === ex.id && recentlyChangedSet.setIdx === i;
+    return `<div class="setbox ${set.doneMark?'done':''} ${isChanged?'changed':''}">
+      <button class="stepbtn"
+        onpointerdown="startHoldZero('${ex.id}', ${i})"
+        onpointerup="endHoldZero('${ex.id}', ${i}, -${step})"
+        onpointerleave="cancelHoldZero()"
+        onpointercancel="cancelHoldZero()">−</button>
+      <span class="setval" onclick="typeSet('${ex.id}', ${i})">${set.value}</span>
+      <button class="stepbtn" onclick="adjustSet('${ex.id}', ${i}, ${step})">+</button>
+      <button class="donebtn" onclick="markSetDone('${ex.id}', ${i})">${set.doneMark?'✓':'Done'}</button>
+    </div>`;
+  }).join('');
+
+  const badge = s.failStreak > 0 ? `<span class="badge deload">${s.failStreak}/${getFailThreshold(ex)} missed</span>` : `<span class="badge up">on track</span>`;
+
+  const weightControl = (ex.mode === 'weighted' || ex.mode === 'weighted_bw')
+    ? `<div class="livectrl">
+        <span class="livectrl-label">Weight</span>
+        <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', -1)">−</button>
+        <span class="livectrl-val">${ex.mode === 'weighted' ? WEIGHTS[s.tier] + ' lb' : (s.addedWeight > 0 ? '+' + s.addedWeight + ' lb' : 'BW')}</span>
+        <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', 1)">+</button>
+      </div>` : '';
+
+  const setsControl = `<div class="livectrl">
+        <span class="livectrl-label">Sets</span>
+        <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', -1)">−</button>
+        <span class="livectrl-val">${(ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets}</span>
+        <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', 1)">+</button>
+      </div>`;
+
+  return `<div class="card ${doneToday?'done-today':''} ${highlighted?'card-focus':''}" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
+    ${highlighted ? `<div class="focus-eyebrow">Now training</div>` : ''}
+    ${doneToday ? `<div class="focus-eyebrow" style="color:var(--danger);">Redo unlocked — this will add a second log entry</div>` : ''}
+    <div class="row"><h3>${doneToday?'✅ ':''}${escapeHtml(ex.name)}</h3>${badge}</div>
+    ${ex.notes ? `<div class="meta" style="font-style:italic;">📝 ${escapeHtml(ex.notes)}</div>` : ''}
+    <div class="meta">Target: ${targetLabel(ex)}</div>
+    <div class="row" style="margin-bottom:10px; gap:16px;">${weightControl}${setsControl}</div>
+    <div class="sets">${setsHtml}</div>
+    <div class="row" style="margin-top:10px;">
+      <button class="btn small secondary" onclick="matchSet1('${ex.id}')">Match set 1</button>
+      <button class="btn small secondary" onclick="skipExercise('${ex.id}')">Skip</button>
+      <button class="btn small" onclick="finishExercise(DAYS[${currentDayIdx}].exercises.find(e=>e.id==='${ex.id}'))">Finish</button>
+    </div>
+  </div>`;
+}
+
+// Session-only set of exercise IDs the user has explicitly chosen to re-log
+// today, after an interstitial warning. Never persisted — a fresh page load
+// always starts every completed exercise back in its locked state.
+let redoUnlocked = new Set();
+
+function getTodayLoggedEntry(ex, day) {
+  const { anchorDate, sessionNum } = getActiveSession(day.label);
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    const h = state.history[i];
+    if (h.exercise === ex.name && h.day === day.label && getEntryDateKey(h) === anchorDate && getEntrySessionNum(h) === sessionNum) return h;
+  }
+  return null;
+}
+
+function unlockExerciseForRedo(exId) {
+  const ex = getExerciseById(exId);
+  showConfirm({
+    title: 'Log this again?',
+    message: `${ex ? ex.name : 'This exercise'} is already logged for today. Doing it again adds a SECOND entry — it'll count twice toward today's volume and duration. Only do this to fix a mistake.`,
+    confirmLabel: 'Unlock to redo',
+    danger: true,
+    onConfirm: () => { redoUnlocked.add(exId); render(); }
+  });
+}
+
+// A tappable dot rail summarizing every exercise in the group at a glance —
+// done (✓), the one currently active (glowing ring), and everything still
+// upcoming (dim). Tapping a dot jumps Focus Mode to preview that exercise.
+function renderProgressRail(day, activeExId) {
+  const dots = day.exercises.map(ex => {
+    const done = isDoneToday(ex.name, day.label);
+    const active = ex.id === activeExId;
+    const cls = done ? 'railstop done' : active ? 'railstop active' : 'railstop';
+    const label = done ? '✓' : '';
+    return `<div class="${cls}" style="${active ? `--rail-color:${day.color};` : ''}" onclick="focusOnExercise('${ex.id}')" title="${escapeHtml(ex.name)}">${label}</div>`;
+  }).join('');
+  return `<div class="progress-rail">${dots}</div>`;
+}
+
+// Manual override so a lazy tap on the progress rail (or an "Up Next" preview)
+// can jump the focused card to a different exercise without losing place —
+// it's cleared automatically the moment its target exercise gets finished.
+let focusOverrideId = null;
+function focusOnExercise(exId) {
+  focusOverrideId = exId;
+  render();
+  requestAnimationFrame(() => {
+    const el = document.getElementById(`card-${exId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
 function renderWorkout() {
   const tabs = DAYS.map((d,i) => {
     const pct = getTodayCompletionPct(d);
@@ -1438,7 +1763,8 @@ function renderWorkout() {
   const day = DAYS[currentDayIdx];
   const activeSessionInfo = getActiveSession(day.label);
   const sessionStart = state.sessionStarts && state.sessionStarts[activeSessionInfo.key];
-  const sessionComplete = sessionStart && getTodayCompletionPct(day) === 100;
+  const pct = getTodayCompletionPct(day);
+  const sessionComplete = sessionStart && pct === 100;
   const startedLabel = sessionStart
     ? `✅ Started at ${new Date(sessionStart).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}${activeSessionInfo.sessionNum > 1 ? ` (session ${activeSessionInfo.sessionNum})` : ''}`
     : '';
@@ -1454,62 +1780,44 @@ function renderWorkout() {
         </div>`
       : `<div class="card" style="text-align:center; padding:10px;"><span class="badge up">${startedLabel}</span></div>`;
 
-  const cards = day.exercises.map(ex => {
-    const s = getExState(ex);
-    const arr = ensureLive(ex);
-    const step = ex.mode === 'timed' ? 5 : 1;
-    const setsHtml = arr.map((set, i) => {
-      const isChanged = recentlyChangedSet && recentlyChangedSet.exId === ex.id && recentlyChangedSet.setIdx === i;
-      return `<div class="setbox ${set.doneMark?'done':''} ${isChanged?'changed':''}">
-        <button class="stepbtn"
-          onpointerdown="startHoldZero('${ex.id}', ${i})"
-          onpointerup="endHoldZero('${ex.id}', ${i}, -${step})"
-          onpointerleave="cancelHoldZero()"
-          onpointercancel="cancelHoldZero()">−</button>
-        <span class="setval" onclick="typeSet('${ex.id}', ${i})">${set.value}</span>
-        <button class="stepbtn" onclick="adjustSet('${ex.id}', ${i}, ${step})">+</button>
-        <button class="donebtn" onclick="markSetDone('${ex.id}', ${i})">${set.doneMark?'✓':'Done'}</button>
-      </div>`;
-    }).join('');
-
-    const badge = s.failStreak > 0 ? `<span class="badge deload">${s.failStreak}/${getFailThreshold(ex)} missed</span>` : `<span class="badge up">on track</span>`;
-    const doneToday = isDoneToday(ex.name, day.label);
-
-    const weightControl = (ex.mode === 'weighted' || ex.mode === 'weighted_bw')
-      ? `<div class="livectrl">
-          <span class="livectrl-label">Weight</span>
-          <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', -1)">−</button>
-          <span class="livectrl-val">${ex.mode === 'weighted' ? WEIGHTS[s.tier] + ' lb' : (s.addedWeight > 0 ? '+' + s.addedWeight + ' lb' : 'BW')}</span>
-          <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', 1)">+</button>
-        </div>` : '';
-
-    const setsControl = `<div class="livectrl">
-          <span class="livectrl-label">Sets</span>
-          <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', -1)">−</button>
-          <span class="livectrl-val">${(ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets}</span>
-          <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', 1)">+</button>
-        </div>`;
-
-    return `<div class="card ${doneToday?'done-today':''}" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
-      <div class="row"><h3>${doneToday?'✅ ':''}${escapeHtml(ex.name)}</h3>${badge}</div>
-      ${ex.notes ? `<div class="meta" style="font-style:italic;">📝 ${escapeHtml(ex.notes)}</div>` : ''}
-      <div class="meta">Target: ${targetLabel(ex)}</div>
-      <div class="row" style="margin-bottom:10px; gap:16px;">${weightControl}${setsControl}</div>
-      <div class="sets">${setsHtml}</div>
-      <div class="row" style="margin-top:10px;">
-        <button class="btn small secondary" onclick="matchSet1('${ex.id}')">Match set 1</button>
-        <button class="btn small secondary" onclick="skipExercise('${ex.id}')">Skip</button>
-        <button class="btn small" onclick="finishExercise(DAYS[${currentDayIdx}].exercises.find(e=>e.id==='${ex.id}'))">Finish</button>
-      </div>
-    </div>`;
-  }).join('');
-
-  const pct = getTodayCompletionPct(day);
   const completeBanner = pct === 100
     ? `<div class="card complete-banner">🎉 ${escapeHtml(day.label)} workout completed!</div>`
     : '';
 
-  return `<div class="tabs" id="workoutDayTabs">${tabs}</div><main>${startBar}${completeBanner}${cards}</main>`;
+  const modeToggle = `<div class="focus-toggle" onclick="setFocusMode(${!getFocusMode()})" title="${getFocusMode() ? 'Switch to full list' : 'Switch to guided focus mode'}">${getFocusMode() ? '🎯 Focus' : '☰ List'}</div>`;
+
+  let body;
+  if (getFocusMode() && day.exercises.length > 0 && pct < 100) {
+    // ---- FOCUS MODE: one exercise at a time, no scrolling required ----
+    const incomplete = day.exercises.filter(ex => !isDoneToday(ex.name, day.label));
+    const overrideValid = focusOverrideId && incomplete.some(ex => ex.id === focusOverrideId);
+    const activeEx = overrideValid ? incomplete.find(ex => ex.id === focusOverrideId) : incomplete[0];
+    if (!overrideValid) focusOverrideId = null;
+    const activeIdx = day.exercises.findIndex(e => e.id === activeEx.id);
+    const upNext = day.exercises.slice(activeIdx + 1).filter(ex => !isDoneToday(ex.name, day.label)).slice(0, WORKOUT_FLOW.upNextPreviewCount);
+    const doneCount = day.exercises.length - incomplete.length;
+
+    const upNextHtml = upNext.length ? `<div class="upnext-row" onclick="focusOnExercise('${upNext[0].id}')">
+        <span class="upnext-label">Up next</span>
+        <span class="upnext-name">${escapeHtml(upNext[0].name)}</span>
+        <span class="upnext-arrow">→</span>
+      </div>` : '';
+
+    const completedHtml = doneCount > 0 ? `<details class="completed-collapse">
+        <summary>✅ Completed (${doneCount}/${day.exercises.length})</summary>
+        ${day.exercises.filter(ex => isDoneToday(ex.name, day.label)).map(ex => `<div class="completed-row">${escapeHtml(ex.name)} <span class="badge up">done</span></div>`).join('')}
+      </details>` : '';
+
+    body = `${renderProgressRail(day, activeEx.id)}
+      ${completedHtml}
+      ${renderExerciseCard(activeEx, day, { highlighted: true })}
+      ${upNextHtml}`;
+  } else {
+    // ---- LIST MODE (or workout already complete): everything at once ----
+    body = day.exercises.map(ex => renderExerciseCard(ex, day)).join('');
+  }
+
+  return `<div class="tabs" id="workoutDayTabs">${tabs}</div><main>${startBar}${completeBanner}${modeToggle}${body}</main>`;
 }
 
 function getMuscleGroupDurationStats(dayLabel) {
@@ -2238,7 +2546,7 @@ function addExercise(dayIdx) {
 function renderManage() {
   const day = DAYS[currentDayIdx];
   const dayTabs = DAYS.map((d,i) =>
-    `<div class="tab" style="${i===currentDayIdx?`background:${d.color};color:#fff;`:''}" onclick="selectDay(${i}); setView('manage')">${d.icon} ${escapeHtml(d.label)}</div>`
+    `<div class="tab" style="${i===currentDayIdx?`background:${d.color};color:#fff;`:''}" onclick="selectDay(${i}, () => setView('manage'))">${d.icon} ${escapeHtml(d.label)}</div>`
   ).join('');
 
   const exList = day.exercises.map((ex, i) => `
@@ -2262,6 +2570,14 @@ function renderManage() {
         <div class="tab" style="${getTheme()==='light'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('light')">☀️ Light</div>
       </div>
       <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean, professional look for daytime use.</div>
+    </div>
+    <div class="card">
+      <h3>🎯 Workout Flow</h3>
+      <div class="tabs" style="padding:0; background:transparent; margin-top:4px;">
+        <div class="tab" style="${getFocusMode()?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setFocusMode(true)">🎯 Focus (guided)</div>
+        <div class="tab" style="${!getFocusMode()?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setFocusMode(false)">☰ Full list</div>
+      </div>
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Focus shows one exercise at a time and auto-advances as you finish each one — no scrolling needed. Full list shows everything at once, like before.</div>
     </div>
     <div class="card">
       <div class="row"><h3>Manage Days</h3><button class="btn small" onclick="addDay()">+ Add Day</button></div>
@@ -2716,6 +3032,17 @@ if (isTestMode()) {
 }
 render();
 requestWakeLock();
+
+// Extra safety net: closing the tab/PWA mid-set with unfinished progress is
+// an easy accident. Most mobile browsers won't show a custom dialog here,
+// but desktop/Android Chrome will prompt — free protection where it works,
+// harmless no-op where it doesn't.
+window.addEventListener('beforeunload', (e) => {
+  if (hasUnsavedFocusProgress(currentDayIdx)) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
