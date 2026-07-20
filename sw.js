@@ -1,4 +1,4 @@
-const CACHE = 'liftlog-v8';
+const CACHE = 'liftlog-v10';
 const ASSETS = ['./index.html', './manifest.json'];
 
 self.addEventListener('install', e => {

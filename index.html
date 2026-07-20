@@ -660,7 +660,7 @@ let currentDayIdx = computeDefaultDayIdx();
 let progressDayIdx = 0;
 let progressExerciseId = null;
 let chartMetric = 'e1rm'; // 'e1rm' | 'weight' | 'volume'
-let chartRange = 'all'; // 'all' | '90' | '30' (days)
+let chartRange = '90'; // 'all' | '90' | '30' (days) — defaults to most recent 90 days
 
 // Content-anchored scroll preservation: instead of remembering a raw pixel
 // offset (which breaks when switching to a day with more/fewer exercises and
@@ -2179,6 +2179,39 @@ async function manualDriveSyncNow() {
   else alert('Sync failed or needs re-connection — try "Connect Google Drive" again.');
 }
 
+// Pulls the single Drive backup file down and replaces local data with it —
+// the counterpart to driveSyncNow() (which only ever pushes local → Drive).
+async function restoreFromDriveNow() {
+  const ds = getDriveSyncState();
+  if (!ds.connected) { alert('Connect Google Drive first.'); return; }
+  if (!confirm('Restore from Google Drive?\n\nThis replaces ALL data on this device with whatever is currently saved in your Drive backup. This cannot be undone.')) return;
+
+  if (!driveAccessToken) {
+    const ok = await silentDriveAuth();
+    if (!ok) { connectGoogleDrive(); return; } // re-prompts sign-in; re-tap Restore once reconnected
+  }
+
+  try {
+    const fileId = await findOrCreateDriveFileId();
+    if (!fileId) { alert('No backup found in Google Drive yet — nothing to restore.'); return; }
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${driveAccessToken}` }
+    });
+    if (!res.ok) throw new Error('Drive API error ' + res.status);
+    const imported = await res.json();
+    if (!imported.exercises || !imported.history) throw new Error('bad format');
+    const keepDriveSync = ds; // this device's Drive connection isn't part of the portable backup itself
+    state = imported;
+    state.driveSync = keepDriveSync;
+    state.driveSync.lastSync = new Date().toISOString();
+    saveState();
+    render();
+    alert('✅ Restored from Google Drive.');
+  } catch (e) {
+    alert('Restore failed — check your connection and try again.');
+  }
+}
+
 function renderHistory() {
   const ds = getDriveSyncState();
   const driveSection = ds.connected
@@ -2187,6 +2220,7 @@ function renderHistory() {
        </div>
        <div class="row" style="margin-top:8px;">
          <button class="btn small secondary" onclick="manualDriveSyncNow()">🔄 Sync now</button>
+         <button class="btn small secondary" onclick="restoreFromDriveNow()">⬇️ Restore from Drive</button>
          <button class="btn small secondary" onclick="disconnectGoogleDrive()">Disconnect</button>
        </div>`
     : `<div class="row" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
@@ -2202,7 +2236,7 @@ function renderHistory() {
       </label>
       <button class="btn small secondary" onclick="editBackupFolder()">📁 Folder</button>
     </div>
-    <div class="meta" style="margin:8px 0 0;">Auto-backups save to: Downloads/${getBackupFolderName()}/</div>
+    <div class="meta" style="margin:8px 0 0;">${getDriveSyncState().connected ? 'Auto-backup: syncing to Google Drive (one file, no clutter).' : `Auto-backups save to: Downloads/${getBackupFolderName()}/`}</div>
     ${driveSection}
   </div>`;
   if (state.history.length === 0) return `<main>${backupBar}${renderCalendar()}<div class="empty">No workouts logged yet.</div></main>`;
@@ -2310,9 +2344,19 @@ function maybePromptBackup() {
   const last = state.meta.lastBackup ? new Date(state.meta.lastBackup) : null;
   const hoursSince = last ? (Date.now() - last) / 3600000 : Infinity;
   if (hoursSince >= 20) {
-    silentAutoBackup(); // effectively once per workout day, fully silent
     const ds = getDriveSyncState();
-    if (ds.connected) driveSyncNow(true).then(() => render());
+    if (ds.connected) {
+      // Drive sync overwrites one single cloud file, so it never clutters your
+      // phone. Once connected, rely on it for the automatic backup and skip
+      // the local Downloads-folder download entirely (that one DOES accumulate
+      // a new dated file each time, since browsers can't truly overwrite a
+      // downloaded file on Android/iOS).
+      driveSyncNow(true).then(() => render());
+      state.meta.lastBackup = new Date().toISOString();
+      saveState();
+    } else {
+      silentAutoBackup(); // no Drive connected — fall back to a local download so at least one backup exists
+    }
   }
 }
 
