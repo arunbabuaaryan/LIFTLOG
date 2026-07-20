@@ -161,14 +161,14 @@
   .livectrl-val { font-size: 14px; font-weight: 700; min-width: 44px; text-align: center; color: var(--text); }
   .sets { display: flex; gap: 8px; flex-wrap: wrap; }
   .setbox {
-    min-width: 148px; height: 52px; border-radius: 13px; background: var(--surface-raised);
+    min-width: 158px; height: 56px; border-radius: 13px; background: var(--surface-raised);
     display: flex; align-items: center; justify-content: space-between; padding: 0 4px;
     border: 1.5px solid var(--border-strong); gap: 2px; transition: border-color .25s ease, background .25s ease;
   }
   .setbox.done { background: var(--success-bg); border-color: var(--success-border); }
   .stepbtn {
-    width: 34px; height: 42px; border-radius: 9px; background: var(--control-bg); color: var(--text);
-    border: none; font-size: 19px; line-height: 1; flex: 0 0 auto; font-weight: 500;
+    width: 42px; height: 46px; border-radius: 10px; background: var(--control-bg); color: var(--text);
+    border: none; font-size: 21px; line-height: 1; flex: 0 0 auto; font-weight: 500;
     transition: transform .1s ease, background .15s ease;
   }
   .stepbtn:active { transform: scale(.9); background: var(--control-bg-active); }
@@ -177,7 +177,7 @@
     min-width: 26px; letter-spacing: -0.01em;
   }
   .donebtn {
-    height: 42px; padding: 0 11px; border-radius: 9px; background: var(--done-bg); color: #fff;
+    height: 46px; padding: 0 12px; border-radius: 10px; background: var(--done-bg); color: #fff;
     border: none; font-size: 12.5px; font-weight: 700; flex: 0 0 auto; letter-spacing: -0.01em;
     transition: transform .1s ease, background .15s ease;
   }
@@ -194,8 +194,45 @@
   }
   .btn:active { transform: scale(.96); filter: brightness(.92); }
   .btn.secondary { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border-strong); }
+  .btn.danger { background: var(--danger); }
   .btn.small { padding: 7px 11px; font-size: 12px; }
   .row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+  /* In-app modal (replaces browser confirm()/prompt() for key flows) */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+    animation: fadeSlide .18s ease-out;
+  }
+  .modal-box {
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: 16px;
+    padding: 20px; max-width: 360px; width: 100%; box-shadow: 0 12px 40px rgba(0,0,0,.4);
+  }
+  .modal-msg { font-size: 14.5px; line-height: 1.45; color: var(--text); white-space: pre-line; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+  /* Toast (status messages + short undo window) */
+  #toastRoot { position: fixed; left: 0; right: 0; bottom: 96px; z-index: 90; display: flex; justify-content: center; pointer-events: none; }
+  .toast {
+    background: var(--surface-raised); border: 1px solid var(--border-strong); color: var(--text);
+    padding: 12px 14px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    display: flex; align-items: center; gap: 12px; font-size: 13.5px; max-width: 90vw;
+    pointer-events: auto; animation: fadeSlide .2s ease-out;
+  }
+  .toast-action { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 6px 11px; font-size: 12.5px; font-weight: 700; flex: 0 0 auto; }
+
+  /* Expandable exercise edit card (Manage screen) */
+  .exp-row {
+    padding: 11px 0; border-bottom: 1px solid var(--border); cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  }
+  .exp-row .chev { color: var(--text-faint); font-size: 12px; transition: transform .2s ease; flex: 0 0 auto; }
+  .exp-row.open .chev { transform: rotate(90deg); }
+  .exp-body { padding: 4px 0 16px; display: flex; flex-direction: column; gap: 12px; }
+  .exp-field label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 4px; }
+  .exp-field input, .exp-field textarea { width: 100%; }
+  .exp-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .exp-section-label { font-size: 12px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; margin-top: 4px; }
   .timer-fab {
     position: fixed; right: 16px; bottom: 100px; width: 92px; height: 92px; border-radius: 46px;
     background: linear-gradient(155deg, #ff8058, #ff5f4a);
@@ -257,6 +294,8 @@
 </div>
 
 <div class="timer-fab" id="timerFab" style="display:none;" onclick="skipTimer()"></div>
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
 
 <script>
 // ---------- DATA ----------
@@ -342,19 +381,34 @@ function setTheme(t) {
   render();
 }
 
+const STATE_VERSION = 1; // bump when the state shape changes, so a restored backup from an older version can be detected/migrated safely
+
 function loadState() {
-  try { return JSON.parse(localStorage.getItem(activeStoreKey())) || { exercises:{}, history:[] }; }
-  catch(e){ return { exercises:{}, history:[] }; }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(activeStoreKey()));
+    if (parsed) { if (parsed.version == null) parsed.version = STATE_VERSION; return parsed; }
+    return { exercises:{}, history:[], version: STATE_VERSION };
+  }
+  catch(e){ return { exercises:{}, history:[], version: STATE_VERSION }; }
 }
-function saveState() { localStorage.setItem(activeStoreKey(), JSON.stringify(state)); }
+function saveState() {
+  try {
+    localStorage.setItem(activeStoreKey(), JSON.stringify(state));
+  } catch (e) {
+    // Storage can throw if it's full or unavailable — surface it instead of silently
+    // losing the tap (e.g. "Finish Exercise" looking like it worked but not persisting).
+    alert('⚠️ Could not save — your device storage may be full. This change was NOT saved. Try freeing up space or exporting/clearing old data.');
+  }
+}
 let state = loadState();
 
-function enableTestMode() {
+async function enableTestMode() {
   if (isTestMode()) return;
-  if (!confirm('Enable Test Mode?\n\nThis switches to a separate copy of your data (starting from what you have now) so you can try anything — logging sets, editing exercises, resetting data — without touching your real progress. Exit anytime to go back.')) return;
+  const ok = await showConfirmModal('Enable Test Mode?\n\nThis switches to a separate copy of your data (starting from what you have now) so you can try anything — logging sets, editing exercises, resetting data — without touching your real progress. Exit anytime to go back.', { confirmLabel: 'Enable' });
+  if (!ok) return;
   if (!localStorage.getItem(TEST_STORE_KEY)) {
     // First time entering test mode: seed it with a copy of real data, not a blank slate
-    localStorage.setItem(TEST_STORE_KEY, localStorage.getItem(STORE_KEY) || JSON.stringify({ exercises:{}, history:[], prs:[], meta:{}, sessionStarts:{} }));
+    localStorage.setItem(TEST_STORE_KEY, localStorage.getItem(STORE_KEY) || JSON.stringify({ exercises:{}, history:[], prs:[], meta:{}, sessionStarts:{}, version: STATE_VERSION }));
   }
   localStorage.setItem(TEST_MODE_FLAG, '1');
   location.reload();
@@ -366,10 +420,11 @@ function disableTestMode() {
   location.reload();
 }
 
-function resetTestData() {
+async function resetTestData() {
   if (!isTestMode()) return;
-  if (!confirm('Reset test data back to a fresh copy of your real data? Your current test progress will be lost.')) return;
-  localStorage.setItem(TEST_STORE_KEY, localStorage.getItem(STORE_KEY) || JSON.stringify({ exercises:{}, history:[], prs:[], meta:{}, sessionStarts:{} }));
+  const ok = await showConfirmModal('Reset test data back to a fresh copy of your real data? Your current test progress will be lost.', { danger: true, confirmLabel: 'Reset' });
+  if (!ok) return;
+  localStorage.setItem(TEST_STORE_KEY, localStorage.getItem(STORE_KEY) || JSON.stringify({ exercises:{}, history:[], prs:[], meta:{}, sessionStarts:{}, version: STATE_VERSION }));
   location.reload();
 }
 
@@ -410,6 +465,8 @@ function persistDays() {
 function getSetsMin(ex) { return ex.setsMin ?? ex.sets; }
 function getSetsMax(ex) { return ex.setsMax ?? (ex.sets + 2); }
 function getRepIncrement(ex) { return (ex.repLow ?? 0) >= 8 ? 2 : 1; }
+const DEFAULT_FAIL_THRESHOLD = 3; // misses before a deload, unless overridden per-exercise in Manage
+function getFailThreshold(ex) { return ex.failThreshold ?? DEFAULT_FAIL_THRESHOLD; }
 
 function getExState(ex) {
   if (!state.exercises[ex.id]) {
@@ -730,8 +787,92 @@ function selectProgressExercise(exId) {
 let view = 'workout';
 let liveSets = {}; // exerciseId -> array of {reps or seconds, done}
 let timerInterval = null;
+let expandedExerciseId = null; // which exercise's edit card is open in Manage
 
 const TRANSITION_REST_SECONDS = 60; // rest between finishing one exercise and starting the next
+
+// ---------- ESCAPING ----------
+// Names/notes come from prompt()/inputs and get interpolated straight into
+// rendered HTML strings — escape them so stray < > & " ' can't break layout
+// (or, for a shared/imported backup file, inject markup).
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ---------- IN-APP MODAL (replaces browser confirm()/prompt() for key flows) ----------
+// A single themed overlay used for confirmations and the "type to confirm" reset flow,
+// so these moments look like the rest of the app instead of a jarring native dialog.
+let modalResolver = null;
+
+function showConfirmModal(message, { danger = false, confirmLabel = 'Confirm' } = {}) {
+  return new Promise(resolve => {
+    modalResolver = resolve;
+    const root = document.getElementById('modalRoot');
+    root.innerHTML = `
+      <div class="modal-overlay" onclick="if(event.target===this) resolveModal(false)">
+        <div class="modal-box">
+          <div class="modal-msg">${escapeHtml(message)}</div>
+          <div class="modal-actions">
+            <button class="btn secondary" onclick="resolveModal(false)">Cancel</button>
+            <button class="btn ${danger ? 'danger' : ''}" onclick="resolveModal(true)">${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+  });
+}
+
+function showTypedConfirmModal(message, requiredText, { confirmLabel = 'Confirm' } = {}) {
+  return new Promise(resolve => {
+    modalResolver = resolve;
+    const root = document.getElementById('modalRoot');
+    root.innerHTML = `
+      <div class="modal-overlay" onclick="if(event.target===this) resolveModal(false)">
+        <div class="modal-box">
+          <div class="modal-msg">${escapeHtml(message)}</div>
+          <input id="modalTypedInput" type="text" placeholder="Type ${escapeHtml(requiredText)}" style="width:100%; margin-top:10px;" autocapitalize="off" autocorrect="off">
+          <div class="modal-actions">
+            <button class="btn secondary" onclick="resolveModal(false)">Cancel</button>
+            <button class="btn danger" onclick="resolveModal(document.getElementById('modalTypedInput').value === '${requiredText}')">${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+    setTimeout(() => { const el = document.getElementById('modalTypedInput'); if (el) el.focus(); }, 50);
+  });
+}
+
+function resolveModal(result) {
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = '';
+  const r = modalResolver;
+  modalResolver = null;
+  if (r) r(result);
+}
+
+// ---------- TOAST (status messages + short undo window) ----------
+let toastTimer = null;
+function showToast(message, { actionLabel = null, onAction = null, duration = 4000 } = {}) {
+  const root = document.getElementById('toastRoot');
+  if (toastTimer) clearTimeout(toastTimer);
+  window.__toastAction = onAction;
+  root.innerHTML = `
+    <div class="toast">
+      <span>${escapeHtml(message)}</span>
+      ${actionLabel ? `<button class="toast-action" onclick="window.__toastAction && window.__toastAction(); hideToast();">${escapeHtml(actionLabel)}</button>` : ''}
+    </div>`;
+  toastTimer = setTimeout(hideToast, duration);
+}
+function hideToast() {
+  const root = document.getElementById('toastRoot');
+  if (root) root.innerHTML = '';
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+  window.__toastAction = null;
+}
 
 // ---------- WAKE LOCK ----------
 let wakeLock = null;
@@ -764,8 +905,11 @@ const SWIPE_TIME_LIMIT = 700;  // ms — ignore slow drags
 
 function handleSwipeStart(e) {
   if (e.touches.length !== 1) { swipeStartX = null; return; }
-  // Don't hijack swipes that start on the horizontally-scrollable tab strip itself
-  if (e.target.closest('.tabs')) { swipeStartX = null; return; }
+  // Don't hijack swipes that start on the horizontally-scrollable tab strip itself,
+  // or inside a form field / the expanded exercise editor / the always-visible
+  // Add Exercise form — accidentally swiping mid-type would otherwise wipe out
+  // whatever you'd entered, since switching days re-renders the whole screen.
+  if (e.target.closest('.tabs, input, select, textarea, [data-no-swipe]')) { swipeStartX = null; return; }
   swipeStartX = e.touches[0].clientX;
   swipeStartY = e.touches[0].clientY;
   swipeStartTime = Date.now();
@@ -790,6 +934,10 @@ function handleSwipeEnd(e) {
   } else if (view === 'progress') {
     const next = (progressDayIdx + direction + DAYS.length) % DAYS.length; // wrap around at both ends
     selectProgressDay(next);
+  } else if (view === 'manage') {
+    const next = (currentDayIdx + direction + DAYS.length) % DAYS.length; // wrap around at both ends
+    expandedExerciseId = null; // collapse any open edit card so the new day starts tidy
+    selectDay(next);
   }
 }
 
@@ -862,8 +1010,11 @@ function matchSet1(exId) {
   render();
 }
 
-function skipExercise(exId, exName) {
-  if (!confirm(`Skip ${exName} for today? No progress or history will be recorded.`)) return;
+async function skipExercise(exId) {
+  const ex = getExerciseById(exId);
+  const exName = ex ? ex.name : 'this exercise';
+  const ok = await showConfirmModal(`Skip ${exName} for today? No progress or history will be recorded.`, { confirmLabel: 'Skip' });
+  if (!ok) return;
   delete liveSets[exId];
   render();
   setTimeout(scrollToNextIncomplete, 100);
@@ -1020,6 +1171,13 @@ function finishExercise(ex) {
   const arr = liveSets[ex.id];
   if (!arr) { alert('Nothing to log yet.'); return; }
   const s = getExState(ex);
+  // Snapshot for undo: everything finishExercise is about to mutate.
+  const undoSnapshot = {
+    exState: JSON.parse(JSON.stringify(s)),
+    historyLen: state.history.length,
+    prsLen: (state.prs || []).length,
+    liveArr: JSON.parse(JSON.stringify(arr))
+  };
   const hasSkippedSet = arr.some(x => x.value === 0);
   let success;
   if (ex.mode === 'timed') {
@@ -1036,6 +1194,7 @@ function finishExercise(ex) {
   } else if (ex.mode === 'weighted') {
     const setsMax = getSetsMax(ex), setsMin = getSetsMin(ex);
     const repInc = getRepIncrement(ex);
+    const failThresh = getFailThreshold(ex);
     if (success) {
       s.failStreak = 0;
       if (s.targetReps < ex.repHigh) { s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh); statusMsg = `Progress: +${repInc} rep(s) next time`; }
@@ -1044,18 +1203,19 @@ function finishExercise(ex) {
       else { statusMsg = 'Maxed out dumbbells and sets — try slower tempo instead.'; }
     } else {
       s.failStreak++;
-      if (s.failStreak >= 3) {
+      if (s.failStreak >= failThresh) {
         s.failStreak = 0;
         if (s.targetReps > ex.repLow) { s.targetReps = Math.max(ex.repLow, s.targetReps - repInc); statusMsg = `Deload: -${repInc} rep(s)`; }
         else if (s.sets > setsMin) { s.sets--; s.targetReps = ex.repLow; statusMsg = 'Deload: removed a set'; }
         else if (s.tier > 0) { s.tier--; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = 'Deload: dropped a weight tier'; }
       } else {
-        statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+        statusMsg = `Missed target (${s.failStreak}/${failThresh} before deload)`;
       }
     }
   } else if (ex.mode === 'weighted_bw') {
     const setsMax = getSetsMax(ex), setsMin = getSetsMin(ex);
     const repInc = getRepIncrement(ex);
+    const failThresh = getFailThreshold(ex);
     if (success) {
       s.failStreak = 0;
       if (s.targetReps < ex.repHigh) { s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh); statusMsg = `Progress: +${repInc} rep(s) next time`; }
@@ -1063,28 +1223,30 @@ function finishExercise(ex) {
       else { s.addedWeight += BELT_INCREMENT; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = `Belt up! Add ${s.addedWeight} lb next time, back to ${setsMin} sets`; leveledUp = true; }
     } else {
       s.failStreak++;
-      if (s.failStreak >= 3) {
+      if (s.failStreak >= failThresh) {
         s.failStreak = 0;
         if (s.targetReps > ex.repLow) { s.targetReps = Math.max(ex.repLow, s.targetReps - repInc); statusMsg = `Deload: -${repInc} rep(s)`; }
         else if (s.sets > setsMin) { s.sets--; s.targetReps = ex.repLow; statusMsg = 'Deload: removed a set'; }
         else if (s.addedWeight > 0) { s.addedWeight = Math.max(0, s.addedWeight - BELT_INCREMENT); s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = 'Deload: removed belt weight'; }
       } else {
-        statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+        statusMsg = `Missed target (${s.failStreak}/${failThresh} before deload)`;
       }
     }
   } else if (ex.mode === 'bodyweight') {
+    const failThresh = getFailThreshold(ex);
     if (success) { s.failStreak = 0; s.targetReps++; statusMsg = 'Progress: +1 rep next time'; }
     else {
       s.failStreak++;
-      if (s.failStreak >= 3) { s.failStreak = 0; s.targetReps = Math.max(1, s.targetReps - 2); statusMsg = 'Deload: -2 reps'; }
-      else statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+      if (s.failStreak >= failThresh) { s.failStreak = 0; s.targetReps = Math.max(1, s.targetReps - 2); statusMsg = 'Deload: -2 reps'; }
+      else statusMsg = `Missed target (${s.failStreak}/${failThresh} before deload)`;
     }
   } else if (ex.mode === 'timed') {
+    const failThresh = getFailThreshold(ex);
     if (success) { s.failStreak = 0; s.targetSeconds += 10; statusMsg = 'Progress: +10 sec next time'; }
     else {
       s.failStreak++;
-      if (s.failStreak >= 3) { s.failStreak = 0; s.targetSeconds = Math.max(15, s.targetSeconds - 10); statusMsg = 'Deload: -10 sec'; }
-      else statusMsg = `Missed target (${s.failStreak}/3 before deload)`;
+      if (s.failStreak >= failThresh) { s.failStreak = 0; s.targetSeconds = Math.max(15, s.targetSeconds - 10); statusMsg = 'Deload: -10 sec'; }
+      else statusMsg = `Missed target (${s.failStreak}/${failThresh} before deload)`;
     }
   }
 
@@ -1112,10 +1274,14 @@ function finishExercise(ex) {
     recordPR(ex.name, sessionBest, unit);
   }
   saveState();
-  alert(`${ex.name}: ${statusMsg}${isPR ? '\n🏆 New PR!' : ''}`);
   delete liveSets[ex.id];
   maybePromptBackup();
   render();
+  showToast(`${ex.name}: ${statusMsg}${isPR ? ' · 🏆 New PR!' : ''}`, {
+    actionLabel: 'Undo',
+    onAction: () => undoFinishExercise(ex.id, undoSnapshot),
+    duration: 6000
+  });
   const dayHasMoreToday = DAYS[currentDayIdx].exercises.some(e => !isDoneToday(e.name, DAYS[currentDayIdx].label));
   if (dayHasMoreToday) {
     startRestTimer(ex.transitionRest ?? TRANSITION_REST_SECONDS); // rest before moving to the next exercise
@@ -1128,6 +1294,26 @@ function finishExercise(ex) {
       setTimeout(() => el.classList.remove('levelup'), 1000);
     }
   }
+}
+
+// Reverts everything finishExercise() changed for this one exercise: progression
+// state, the history/PR entries it appended, and puts the in-progress sets back
+// on screen so you can re-log them. Available for ~6s via the toast's Undo button.
+// Note: if Drive auto-sync fires during that window, it could sync the pre-undo
+// version — harmless, since the next sync corrects it, but not instantaneous.
+function undoFinishExercise(exId, snapshot) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  state.exercises[exId] = snapshot.exState;
+  state.history.length = snapshot.historyLen;
+  if (state.prs) state.prs.length = snapshot.prsLen;
+  liveSets[exId] = snapshot.liveArr;
+  saveState();
+  clearInterval(timerInterval);
+  const fab = document.getElementById('timerFab');
+  if (fab) fab.style.display = 'none';
+  render();
+  showToast(`Undid "${ex.name}" — sets restored.`);
 }
 
 // ---------- REST TIMER ----------
@@ -1234,7 +1420,7 @@ function renderWorkout() {
     const sessionsToday = getSessionCount(todayKey, d.label);
     const sessionTag = sessionsToday > 1 ? `<span class="badge" style="padding:1px 6px; font-size:9.5px;">×${sessionsToday}</span>` : '';
     return `<div class="tab" style="${tabStyle}" onclick="selectDay(${i})">
-      ${d.icon} ${d.label} ${sessionTag}
+      ${d.icon} ${escapeHtml(d.label)} ${sessionTag}
       <span class="ring" style="background: conic-gradient(${d.color} ${pct*3.6}deg, var(--ring-track) 0deg)"><span class="ring-inner">${pct === 100 ? '✓' : ''}</span></span>
     </div>`;
   }).join('');
@@ -1283,7 +1469,8 @@ function renderWorkout() {
       </div>`;
     }).join('');
 
-    const badge = s.failStreak > 0 ? `<span class="badge deload">${s.failStreak}/3 missed</span>` : `<span class="badge up">on track</span>`;
+    const failThresh = getFailThreshold(ex);
+    const badge = s.failStreak > 0 ? `<span class="badge deload">${s.failStreak}/${failThresh} missed</span>` : `<span class="badge up">on track</span>`;
     const doneToday = isDoneToday(ex.name, day.label);
 
     const weightControl = (ex.mode === 'weighted' || ex.mode === 'weighted_bw')
@@ -1302,13 +1489,13 @@ function renderWorkout() {
         </div>`;
 
     return `<div class="card ${doneToday?'done-today':''}" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
-      <div class="row"><h3>${doneToday?'✅ ':''}${ex.name}</h3>${badge}</div>
+      <div class="row"><h3>${doneToday?'✅ ':''}${escapeHtml(ex.name)}</h3>${badge}</div>
       <div class="meta">Target: ${targetLabel(ex)}</div>
       <div class="row" style="margin-bottom:10px; gap:16px;">${weightControl}${setsControl}</div>
       <div class="sets">${setsHtml}</div>
       <div class="row" style="margin-top:10px;">
         <button class="btn small secondary" onclick="matchSet1('${ex.id}')">Match set 1</button>
-        <button class="btn small secondary" onclick="skipExercise('${ex.id}', '${ex.name}')">Skip</button>
+        <button class="btn small secondary" onclick="skipExercise('${ex.id}')">Skip</button>
         <button class="btn small" onclick="finishExercise(DAYS[${currentDayIdx}].exercises.find(e=>e.id==='${ex.id}'))">Finish</button>
       </div>
     </div>`;
@@ -1316,7 +1503,7 @@ function renderWorkout() {
 
   const pct = getTodayCompletionPct(day);
   const completeBanner = pct === 100
-    ? `<div class="card complete-banner">🎉 ${day.label} workout completed!</div>`
+    ? `<div class="card complete-banner">🎉 ${escapeHtml(day.label)} workout completed!</div>`
     : '';
 
   return `<div class="tabs" id="workoutDayTabs">${tabs}</div><main>${startBar}${completeBanner}${cards}</main>`;
@@ -1384,7 +1571,7 @@ function renderProgress() {
   const progTabs = DAYS.map((d,i) => {
     const active = i === progressDayIdx;
     const tabStyle = active ? `background:${d.color}; color:#fff;` : '';
-    return `<div class="tab" style="${tabStyle}" onclick="selectProgressDay(${i})">${d.icon} ${d.label}</div>`;
+    return `<div class="tab" style="${tabStyle}" onclick="selectProgressDay(${i})">${d.icon} ${escapeHtml(d.label)}</div>`;
   }).join('');
 
   if (!progDay.exercises.find(e => e.id === progressExerciseId)) {
@@ -1394,18 +1581,18 @@ function renderProgress() {
   const exercisePills = progDay.exercises.map(ex => {
     const active = ex.id === progressExerciseId;
     const style = active ? `background:${progDay.color}; color:#fff; border-color:transparent;` : '';
-    return `<div class="tab" style="${style}" onclick="selectProgressExercise('${ex.id}')">${ex.name}</div>`;
+    return `<div class="tab" style="${style}" onclick="selectProgressExercise('${ex.id}')">${escapeHtml(ex.name)}</div>`;
   }).join('') || `<div class="empty" style="padding:10px 0;">No exercises on this day yet.</div>`;
 
   const prs = (state.prs || []).slice(0, 5).map(p => {
     const daysAgo = Math.floor((Date.now() - new Date(p.date).getTime()) / 86400000);
-    return `<div class="histitem">🏆 <strong>${p.exercise}</strong> — ${p.value} ${p.unit} <span style="color:var(--text-faint)">(${new Date(p.date).toLocaleDateString()} · ${formatDaysAgo(daysAgo)})</span></div>`;
+    return `<div class="histitem">🏆 <strong>${escapeHtml(p.exercise)}</strong> — ${p.value} ${p.unit} <span style="color:var(--text-faint)">(${new Date(p.date).toLocaleDateString()} · ${formatDaysAgo(daysAgo)})</span></div>`;
   }).join('') || `<div class="empty" style="padding:14px 0;">No PRs yet — keep logging!</div>`;
 
   const durationByDay = DAYS.map(d => {
     const stats = getMuscleGroupDurationStats(d.label);
     return `<div class="histitem">
-      <strong>${d.icon} ${d.label}</strong><br>
+      <strong>${d.icon} ${escapeHtml(d.label)}</strong><br>
       ${stats
         ? `avg <strong>${stats.mean} min</strong> · range ${stats.min}–${stats.max} min <span style="color:var(--text-faint)">(${stats.count} session${stats.count>1?'s':''})</span><br>
            last session: <strong>${stats.last} min</strong> <span style="color:var(--text-faint)">(${new Date(stats.lastDate).toLocaleDateString()})</span>`
@@ -1438,7 +1625,7 @@ function renderProgress() {
   const balanceHtml = dayFrequency.map(d => {
     const pct = Math.round((d.count / maxFreq) * 100);
     return `<div class="histitem">
-      <div class="row"><span>${d.icon} ${d.label}</span><strong>${d.count}×</strong></div>
+      <div class="row"><span>${d.icon} ${escapeHtml(d.label)}</span><strong>${d.count}×</strong></div>
       <div style="height:6px; background:var(--surface-raised); border-radius:3px; overflow:hidden; margin-top:5px;">
         <div style="width:${pct}%; height:100%; background:${d.color};"></div>
       </div>
@@ -1470,7 +1657,7 @@ function renderProgress() {
       ${balanceHtml}
     </div>
     <div class="card" id="pcard-bests">
-      <h3>🥇 ${progDay.icon} ${progDay.label} — All-Time Bests</h3>
+      <h3>🥇 ${progDay.icon} ${escapeHtml(progDay.label)} — All-Time Bests</h3>
       ${bestsHtml}
     </div>
     <div class="card" id="pcard-duration">
@@ -1480,7 +1667,7 @@ function renderProgress() {
     <div class="card" id="pcard-progression" style="padding:0; overflow:hidden;">
       <div class="tabs" id="progressDayTabs" style="border-radius:16px 16px 0 0;">${progTabs}</div>
       <div style="padding:16px;">
-        <h3 style="margin-bottom:10px;">${progDay.icon} ${progDay.label} — Progression</h3>
+        <h3 style="margin-bottom:10px;">${progDay.icon} ${escapeHtml(progDay.label)} — Progression</h3>
         <div class="tabs" id="progressExerciseTabs" style="padding:0 0 12px 0; background:transparent;">${exercisePills}</div>
         ${(() => {
           const selectedEx = getExerciseById(progressExerciseId);
@@ -1658,16 +1845,16 @@ function renderCalendar() {
   </div>`;
 }
 
-function resetAllData() {
-  const confirmText = prompt('This will permanently delete ALL workout history, progression, PRs, and streaks (your exercise list and Google Drive connection stay intact). Type RESET to confirm:');
-  if (confirmText !== 'RESET') { alert('Cancelled — nothing was deleted.'); return; }
+async function resetAllData() {
+  const confirmed = await showTypedConfirmModal('This will permanently delete ALL workout history, progression, PRs, and streaks (your exercise list and Google Drive connection stay intact). Type RESET to confirm:', 'RESET', { confirmLabel: 'Delete Everything' });
+  if (!confirmed) return;
   const keepDays = DAYS;
   const keepDriveSync = state.driveSync;
-  state = { exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays, driveSync: keepDriveSync };
+  state = { exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays, driveSync: keepDriveSync, version: STATE_VERSION };
   saveState();
   liveSets = {};
   currentDayIdx = 0;
-  alert('All data reset. Exercise list and Drive connection were kept.');
+  showToast('All data reset. Exercise list and Drive connection were kept.');
   setView('workout');
 }
 
@@ -1714,20 +1901,9 @@ function moveDay(dayIdx, direction) {
   render();
 }
 
-function renameExercise(exId) {
-  const ex = getExerciseById(exId);
-  if (!ex) return;
-  const newName = prompt(`Rename "${ex.name}" to:`, ex.name);
-  if (!newName || !newName.trim() || newName.trim() === ex.name) return;
-  const oldName = ex.name;
-  const cleanName = newName.trim();
-  ex.name = cleanName;
-  // Cascade: update history and PR records so charts/PR lookups still match this exercise
-  state.history.forEach(h => { if (h.exercise === oldName) h.exercise = cleanName; });
-  if (state.prs) state.prs.forEach(p => { if (p.exercise === oldName) p.exercise = cleanName; });
-  persistDays();
-  saveState();
-  render();
+function toggleExerciseExpand(exId) {
+  expandedExerciseId = (expandedExerciseId === exId) ? null : exId;
+  renderPreservingScroll();
 }
 
 function moveExercise(dayIdx, exIdx, direction) {
@@ -1739,10 +1915,11 @@ function moveExercise(dayIdx, exIdx, direction) {
   render();
 }
 
-function removeDay(dayIdx) {
+async function removeDay(dayIdx) {
   const day = DAYS[dayIdx];
   if (DAYS.length <= 1) { alert('You need at least one day.'); return; }
-  if (!confirm(`Delete the entire "${day.label}" day and ALL its exercises + history? This cannot be undone.`)) return;
+  const ok = await showConfirmModal(`Delete the entire "${day.label}" day and ALL its exercises + history? This cannot be undone.`, { danger: true, confirmLabel: 'Delete Day' });
+  if (!ok) return;
   const exNames = day.exercises.map(e => e.name);
   const exIds = day.exercises.map(e => e.id);
   state.history = state.history.filter(h => !exNames.includes(h.exercise));
@@ -1765,134 +1942,157 @@ function addDay() {
   persistDays();
   currentDayIdx = DAYS.length - 1;
   render();
-  alert(`Added "${label.trim()}". Now add exercises to it below.`);
+  showToast(`Added "${label.trim()}". Now add exercises to it below.`);
 }
 
-function removeExercise(dayIdx, exId) {
+async function removeExercise(dayIdx, exId) {
   const day = DAYS[dayIdx];
   const ex = day.exercises.find(e => e.id === exId);
-  if (!confirm(`Remove "${ex.name}" and delete all its history? This cannot be undone.`)) return;
+  if (!ex) return;
+  const ok = await showConfirmModal(`Remove "${ex.name}" and delete all its history? This cannot be undone.`, { danger: true, confirmLabel: 'Remove' });
+  if (!ok) return;
   day.exercises = day.exercises.filter(e => e.id !== exId);
   state.history = state.history.filter(h => h.exercise !== ex.name);
   if (state.prs) state.prs = state.prs.filter(p => p.exercise !== ex.name);
   if (state.exercises) delete state.exercises[ex.id];
+  if (expandedExerciseId === exId) expandedExerciseId = null;
   persistDays();
   saveState();
   render();
 }
 
-function editExerciseConfig(exId) {
+// Renders the full editable field set for one exercise's expanded card: identity
+// (name/notes), timing (rest times, deload threshold), mode-specific setup
+// (sets/reps or hold duration), and a "Current Progress" section that replaces
+// the old separate 📈 Progress popups with inline fields on the same card.
+function renderExerciseEditBody(ex) {
+  const s = getExState(ex);
+  let modeFields = '';
+  if (ex.mode === 'weighted' || ex.mode === 'weighted_bw') {
+    modeFields = `
+      <div class="exp-grid2">
+        <div class="exp-field"><label>Sets — min</label><input id="f-setsmin-${ex.id}" type="number" value="${getSetsMin(ex)}"></div>
+        <div class="exp-field"><label>Sets — max</label><input id="f-setsmax-${ex.id}" type="number" value="${getSetsMax(ex)}"></div>
+      </div>
+      <div class="exp-grid2">
+        <div class="exp-field"><label>Rep range — low</label><input id="f-replow-${ex.id}" type="number" value="${ex.repLow}"></div>
+        <div class="exp-field"><label>Rep range — high</label><input id="f-rephigh-${ex.id}" type="number" value="${ex.repHigh}"></div>
+      </div>
+      <div class="meta" style="margin:0;">Rep increment auto-sets from the low end: 2/session if 8+, 1/session if 7 or below.</div>
+      <div class="exp-section-label">Current Progress</div>
+      <div class="exp-grid2">
+        ${ex.mode === 'weighted'
+          ? `<div class="exp-field"><label>Current weight (lb)</label><select id="f-curweight-${ex.id}">${WEIGHTS.map(w => `<option value="${w}" ${WEIGHTS[s.tier] === w ? 'selected' : ''}>${w}</option>`).join('')}</select></div>`
+          : `<div class="exp-field"><label>Current belt weight (lb)</label><input id="f-curbelt-${ex.id}" type="number" step="${BELT_INCREMENT}" value="${s.addedWeight}"></div>`}
+        <div class="exp-field"><label>Current target reps</label><input id="f-curtargetreps-${ex.id}" type="number" value="${s.targetReps}"></div>
+      </div>`;
+  } else if (ex.mode === 'bodyweight') {
+    modeFields = `
+      <div class="exp-grid2">
+        <div class="exp-field"><label>Sets</label><input id="f-sets-${ex.id}" type="number" value="${ex.sets}"></div>
+        <div class="exp-field"><label>Starting reps (baseline)</label><input id="f-startreps-${ex.id}" type="number" value="${ex.startReps}"></div>
+      </div>
+      <div class="exp-section-label">Current Progress</div>
+      <div class="exp-field"><label>Current target reps</label><input id="f-curtargetreps-${ex.id}" type="number" value="${s.targetReps}"></div>`;
+  } else if (ex.mode === 'timed') {
+    modeFields = `
+      <div class="exp-field"><label>Starting hold (seconds, baseline)</label><input id="f-startsec-${ex.id}" type="number" value="${ex.startSeconds}"></div>
+      <div class="exp-section-label">Current Progress</div>
+      <div class="exp-field"><label>Current target hold (seconds)</label><input id="f-curtargetsec-${ex.id}" type="number" value="${s.targetSeconds}"></div>`;
+  }
+
+  return `
+    <div class="exp-body" data-no-swipe onclick="event.stopPropagation()">
+      <div class="exp-field"><label>Name</label><input id="f-name-${ex.id}" type="text" value="${escapeHtml(ex.name)}"></div>
+      <div class="exp-grid2">
+        <div class="exp-field"><label>Rest between sets (sec)</label><input id="f-rest-${ex.id}" type="number" value="${ex.rest}"></div>
+        <div class="exp-field"><label>Rest before next exercise (sec)</label><input id="f-transrest-${ex.id}" type="number" value="${ex.transitionRest ?? TRANSITION_REST_SECONDS}"></div>
+      </div>
+      <div class="exp-field"><label>Misses before deload</label><input id="f-failthresh-${ex.id}" type="number" min="1" value="${getFailThreshold(ex)}"></div>
+      ${modeFields}
+      <div class="exp-field"><label>Notes (optional)</label><textarea id="f-notes-${ex.id}" rows="2" placeholder="Form cues, machine number, anything worth remembering...">${escapeHtml(ex.notes || '')}</textarea></div>
+      <div class="row" style="margin-top:4px;">
+        <button class="btn small secondary" onclick="removeExercise(${currentDayIdx}, '${ex.id}')">🗑 Remove Exercise</button>
+        <button class="btn small" onclick="saveExerciseSettings('${ex.id}')">Save Changes</button>
+      </div>
+    </div>`;
+}
+
+// Reads every field from the expanded card and applies it in one pass — the
+// consolidated replacement for the old Rename / Sets-Reps / Rest / Progress
+// popup chain.
+function saveExerciseSettings(exId) {
   const ex = getExerciseById(exId);
   if (!ex) return;
-
   const s = getExState(ex);
+  const field = (suffix) => document.getElementById(`f-${suffix}-${exId}`);
+
+  const nameEl = field('name');
+  if (nameEl) {
+    const cleanName = nameEl.value.trim();
+    if (cleanName && cleanName !== ex.name) {
+      const oldName = ex.name;
+      ex.name = cleanName;
+      state.history.forEach(h => { if (h.exercise === oldName) h.exercise = cleanName; });
+      if (state.prs) state.prs.forEach(p => { if (p.exercise === oldName) p.exercise = cleanName; });
+    }
+  }
+
+  const restEl = field('rest');
+  if (restEl) { const n = parseInt(restEl.value); if (!isNaN(n) && n > 0) ex.rest = n; }
+  const transEl = field('transrest');
+  if (transEl) { const n = parseInt(transEl.value); if (!isNaN(n) && n >= 0) ex.transitionRest = n; }
+  const threshEl = field('failthresh');
+  if (threshEl) { const n = parseInt(threshEl.value); if (!isNaN(n) && n >= 1) ex.failThreshold = n; }
+  const notesEl = field('notes');
+  if (notesEl) ex.notes = notesEl.value.trim();
 
   if (ex.mode === 'weighted' || ex.mode === 'weighted_bw') {
-    const curMin = getSetsMin(ex), curMax = getSetsMax(ex);
-    const minInput = prompt(`Sets — MIN (your starting point, and where it resets after a weight increase). Current: ${curMin}`, curMin);
-    if (minInput === null) return;
-    const newMin = parseInt(minInput);
-    if (isNaN(newMin) || newMin < 1) { alert('Enter a valid number of sets (1 or more).'); return; }
-
-    const maxInput = prompt(`Sets — MAX (ceiling before weight increases). Current: ${curMax}`, curMax);
-    if (maxInput === null) return;
-    const newMax = Math.max(newMin, parseInt(maxInput) || newMin);
-
-    ex.setsMin = newMin;
-    ex.setsMax = newMax;
-    s.sets = Math.min(Math.max(s.sets, newMin), newMax); // keep current live sets within new range
-
-    const lowInput = prompt(`Custom rep range — LOW end. Current: ${ex.repLow}\n(Increment auto-adjusts: 2 reps/session if low end is 8+, 1 rep/session if 7 or below)`, ex.repLow);
-    if (lowInput !== null && !isNaN(parseInt(lowInput))) ex.repLow = Math.max(1, parseInt(lowInput));
-    const highInput = prompt(`Custom rep range — HIGH end (sets/weight increases once you hit this). Current: ${ex.repHigh}`, ex.repHigh);
-    if (highInput !== null && !isNaN(parseInt(highInput))) ex.repHigh = Math.max(ex.repLow, parseInt(highInput));
-
-    // Keep current live target within the new valid range
+    const minEl = field('setsmin'), maxEl = field('setsmax');
+    if (minEl && maxEl) {
+      const newMin = parseInt(minEl.value);
+      let newMax = parseInt(maxEl.value);
+      if (!isNaN(newMin) && newMin >= 1) {
+        if (isNaN(newMax) || newMax < newMin) newMax = newMin;
+        ex.setsMin = newMin; ex.setsMax = newMax;
+        s.sets = Math.min(Math.max(s.sets, newMin), newMax);
+      }
+    }
+    const lowEl = field('replow'), highEl = field('rephigh');
+    if (lowEl && !isNaN(parseInt(lowEl.value))) ex.repLow = Math.max(1, parseInt(lowEl.value));
+    if (highEl && !isNaN(parseInt(highEl.value))) ex.repHigh = Math.max(ex.repLow, parseInt(highEl.value));
     s.targetReps = Math.min(Math.max(s.targetReps, ex.repLow), ex.repHigh);
+
+    if (ex.mode === 'weighted') {
+      const wEl = field('curweight');
+      if (wEl) { const idx = WEIGHTS.indexOf(parseInt(wEl.value)); if (idx !== -1) s.tier = idx; }
+    } else {
+      const beltEl = field('curbelt');
+      if (beltEl) { const n = parseInt(beltEl.value); if (!isNaN(n) && n >= 0) s.addedWeight = n; }
+    }
+    const curRepsEl = field('curtargetreps');
+    if (curRepsEl) { const n = parseInt(curRepsEl.value); if (!isNaN(n) && n >= 1) s.targetReps = n; }
   } else if (ex.mode === 'bodyweight') {
-    const setsInput = prompt(`Number of sets for "${ex.name}". Current: ${ex.sets}`, ex.sets);
-    if (setsInput === null) return;
-    const newSets = parseInt(setsInput);
-    if (isNaN(newSets) || newSets < 1) { alert('Enter a valid number of sets (1 or more).'); return; }
-    ex.sets = newSets;
-    const repsInput = prompt(`Default starting reps. Current: ${ex.startReps}`, ex.startReps);
-    if (repsInput !== null && !isNaN(parseInt(repsInput))) ex.startReps = Math.max(1, parseInt(repsInput));
+    const setsEl = field('sets');
+    if (setsEl) { const n = parseInt(setsEl.value); if (!isNaN(n) && n >= 1) ex.sets = n; }
+    const startRepsEl = field('startreps');
+    if (startRepsEl) { const n = parseInt(startRepsEl.value); if (!isNaN(n) && n >= 1) ex.startReps = n; }
+    const curRepsEl = field('curtargetreps');
+    if (curRepsEl) { const n = parseInt(curRepsEl.value); if (!isNaN(n) && n >= 1) s.targetReps = n; }
   } else if (ex.mode === 'timed') {
-    const secInput = prompt(`Default starting hold time (seconds). Current: ${ex.startSeconds}`, ex.startSeconds);
-    if (secInput !== null && !isNaN(parseInt(secInput))) ex.startSeconds = Math.max(1, parseInt(secInput));
+    const startSecEl = field('startsec');
+    if (startSecEl) { const n = parseInt(startSecEl.value); if (!isNaN(n) && n >= 1) ex.startSeconds = n; }
+    const curSecEl = field('curtargetsec');
+    if (curSecEl) { const n = parseInt(curSecEl.value); if (!isNaN(n) && n >= 1) s.targetSeconds = n; }
   }
 
   delete liveSets[exId]; // force re-generation with new set count/targets next render
   persistDays();
   saveState();
-  alert(`Updated setup for "${ex.name}".`);
+  const savedName = ex.name;
+  expandedExerciseId = null;
   render();
-}
-
-function editRestTime(exId) {
-  const ex = getExerciseById(exId);
-  if (!ex) return;
-  const input = prompt(`Rest BETWEEN SETS (seconds). Current: ${ex.rest}s`, ex.rest);
-  if (input === null) return;
-  const n = parseInt(input);
-  if (isNaN(n) || n <= 0) { alert('Enter a valid number of seconds.'); return; }
-  ex.rest = n;
-
-  const currentTransition = ex.transitionRest ?? TRANSITION_REST_SECONDS;
-  const input2 = prompt(`Rest AFTER finishing this exercise, before the next one (seconds). Current: ${currentTransition}s`, currentTransition);
-  if (input2 !== null) {
-    const n2 = parseInt(input2);
-    if (!isNaN(n2) && n2 >= 0) ex.transitionRest = n2;
-  }
-
-  persistDays();
-  alert(`Updated rest times for "${ex.name}": ${ex.rest}s between sets, ${ex.transitionRest ?? TRANSITION_REST_SECONDS}s before next exercise.`);
-  render();
-}
-
-function editExerciseProgress(exId) {
-  const ex = getExerciseById(exId);
-  if (!ex) return;
-  const s = getExState(ex);
-
-  if (ex.mode === 'weighted') {
-    const current = WEIGHTS[s.tier];
-    const input = prompt(`Current dumbbell weight: ${current} lb.\nEnter new weight (one of ${WEIGHTS.join(', ')}):`, current);
-    if (input === null) return;
-    const n = parseInt(input);
-    const idx = WEIGHTS.indexOf(n);
-    if (idx === -1) { alert(`Must be one of: ${WEIGHTS.join(', ')}`); return; }
-    s.tier = idx;
-    const reps = prompt(`Target reps to start at this weight (usually ${ex.repLow}):`, ex.repLow);
-    if (reps !== null && !isNaN(parseInt(reps))) s.targetReps = Math.max(1, parseInt(reps));
-    s.failStreak = 0;
-  } else if (ex.mode === 'weighted_bw') {
-    const input = prompt(`Current belt weight: ${s.addedWeight} lb.\nEnter new belt weight (multiple of ${BELT_INCREMENT}):`, s.addedWeight);
-    if (input === null) return;
-    const n = parseInt(input);
-    if (isNaN(n) || n < 0) { alert('Enter a valid non-negative number.'); return; }
-    s.addedWeight = n;
-    const reps = prompt(`Target reps to start at this belt weight (usually ${ex.repLow}):`, ex.repLow);
-    if (reps !== null && !isNaN(parseInt(reps))) s.targetReps = Math.max(1, parseInt(reps));
-    s.failStreak = 0;
-  } else if (ex.mode === 'bodyweight') {
-    const input = prompt(`Current target reps: ${s.targetReps}.\nEnter new target reps:`, s.targetReps);
-    if (input === null) return;
-    const n = parseInt(input);
-    if (isNaN(n) || n < 1) { alert('Enter a valid number.'); return; }
-    s.targetReps = n;
-    s.failStreak = 0;
-  } else if (ex.mode === 'timed') {
-    const input = prompt(`Current target hold: ${s.targetSeconds}s.\nEnter new target seconds:`, s.targetSeconds);
-    if (input === null) return;
-    const n = parseInt(input);
-    if (isNaN(n) || n < 1) { alert('Enter a valid number.'); return; }
-    s.targetSeconds = n;
-    s.failStreak = 0;
-  }
-  saveState();
-  alert(`Updated. All future sessions for "${ex.name}" will project from this new baseline.`);
-  render();
+  showToast(`Saved "${savedName}".`);
 }
 
 function onManageModeChange() {
@@ -1933,22 +2133,24 @@ function addExercise(dayIdx) {
 function renderManage() {
   const day = DAYS[currentDayIdx];
   const dayTabs = DAYS.map((d,i) =>
-    `<div class="tab" style="${i===currentDayIdx?`background:${d.color};color:#fff;`:''}" onclick="selectDay(${i}); setView('manage')">${d.icon} ${d.label}</div>`
+    `<div class="tab" style="${i===currentDayIdx?`background:${d.color};color:#fff;`:''}" onclick="selectDay(${i}); setView('manage')">${d.icon} ${escapeHtml(d.label)}</div>`
   ).join('');
 
-  const exList = day.exercises.map((ex, i) => `
-    <div class="histitem row">
-      <span>${ex.name} <span class="badge">${ex.mode}</span></span>
-      <span style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
-        <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, 1)" ${i===day.exercises.length-1?'disabled style="opacity:.35;"':''}>↓</button>
-        <button class="btn small secondary" onclick="renameExercise('${ex.id}')">✏️ Rename</button>
-        <button class="btn small secondary" onclick="editExerciseConfig('${ex.id}')">🔧 Sets/Reps</button>
-        <button class="btn small secondary" onclick="editExerciseProgress('${ex.id}')">📈 Progress</button>
-        <button class="btn small secondary" onclick="editRestTime('${ex.id}')">⏱ Rest</button>
-        <button class="btn small secondary" onclick="removeExercise(${currentDayIdx}, '${ex.id}')">🗑 Remove</button>
-      </span>
-    </div>`).join('') || `<div class="empty">No exercises on this day.</div>`;
+  const exList = day.exercises.map((ex, i) => {
+    const isOpen = expandedExerciseId === ex.id;
+    return `
+    <div>
+      <div class="exp-row ${isOpen ? 'open' : ''}" onclick="toggleExerciseExpand('${ex.id}')">
+        <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span></span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <button class="btn small secondary" onclick="event.stopPropagation(); moveExercise(${currentDayIdx}, ${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
+          <button class="btn small secondary" onclick="event.stopPropagation(); moveExercise(${currentDayIdx}, ${i}, 1)" ${i===day.exercises.length-1?'disabled style="opacity:.35;"':''}>↓</button>
+          <span class="chev">▶</span>
+        </span>
+      </div>
+      ${isOpen ? renderExerciseEditBody(ex) : ''}
+    </div>`;
+  }).join('') || `<div class="empty">No exercises on this day.</div>`;
 
   return `<div class="tabs">${dayTabs}</div>
   <main>
@@ -1964,7 +2166,7 @@ function renderManage() {
       <div class="row"><h3>Manage Days</h3><button class="btn small" onclick="addDay()">+ Add Day</button></div>
       ${DAYS.map((d,i) => `
         <div class="histitem row">
-          <span>${d.icon} ${d.label} <span class="badge">${d.exercises.length} exercises</span></span>
+          <span>${d.icon} ${escapeHtml(d.label)} <span class="badge">${d.exercises.length} exercises</span></span>
           <span style="display:flex; gap:6px; flex-wrap:wrap;">
             <button class="btn small secondary" onclick="moveDay(${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
             <button class="btn small secondary" onclick="moveDay(${i}, 1)" ${i===DAYS.length-1?'disabled style="opacity:.35;"':''}>↓</button>
@@ -1974,11 +2176,11 @@ function renderManage() {
         </div>`).join('')}
     </div>
     <div class="card">
-      <h3>Exercises — ${day.label}</h3>
+      <h3>Exercises — ${escapeHtml(day.label)} <span class="meta" style="margin:0; font-weight:400;">(tap one to edit)</span></h3>
       ${exList}
     </div>
-    <div class="card">
-      <h3>+ Add Exercise to ${day.label}</h3>
+    <div class="card" data-no-swipe>
+      <h3>+ Add Exercise to ${escapeHtml(day.label)}</h3>
       <div style="display:flex; flex-direction:column; gap:10px;">
         <input id="newExName" type="text" placeholder="Exercise name">
         <select id="newExMode" onchange="onManageModeChange()">
@@ -2096,8 +2298,9 @@ async function onDriveTokenAcquired() {
   render();
 }
 
-function disconnectGoogleDrive() {
-  if (!confirm('Disconnect Google Drive? Local backups (Downloads folder) will keep working as before.')) return;
+async function disconnectGoogleDrive() {
+  const ok = await showConfirmModal('Disconnect Google Drive? Local backups (Downloads folder) will keep working as before.', { confirmLabel: 'Disconnect' });
+  if (!ok) return;
   const ds = getDriveSyncState();
   ds.connected = false;
   ds.email = null;
@@ -2184,7 +2387,8 @@ async function manualDriveSyncNow() {
 async function restoreFromDriveNow() {
   const ds = getDriveSyncState();
   if (!ds.connected) { alert('Connect Google Drive first.'); return; }
-  if (!confirm('Restore from Google Drive?\n\nThis replaces ALL data on this device with whatever is currently saved in your Drive backup. This cannot be undone.')) return;
+  const ok = await showConfirmModal('Restore from Google Drive?\n\nThis replaces ALL data on this device with whatever is currently saved in your Drive backup. This cannot be undone.', { danger: true, confirmLabel: 'Restore' });
+  if (!ok) return;
 
   if (!driveAccessToken) {
     const ok = await silentDriveAuth();
@@ -2244,7 +2448,7 @@ function renderHistory() {
     const date = new Date(h.date).toLocaleString();
     const setsStr = h.sets.join(', ');
     return `<div class="histitem">
-      <strong>${h.exercise}</strong> <span class="badge">${h.day}</span><br>
+      <strong>${escapeHtml(h.exercise)}</strong> <span class="badge">${escapeHtml(h.day)}</span><br>
       ${h.weight ? h.weight+' lb · ' : ''}sets: ${setsStr}<br>
       <span style="color:var(--text-faint)">${date}</span>
     </div>`;
@@ -2364,17 +2568,20 @@ function importBackup(event) {
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const imported = JSON.parse(reader.result);
       if (!imported.exercises || !imported.history) throw new Error('bad format');
-      if (confirm('Import will replace all current data. Continue?')) {
+      const ok = await showConfirmModal('Import will replace all current data. Continue?', { danger: true, confirmLabel: 'Import' });
+      if (ok) {
         const keepDriveSync = state.driveSync; // this device's Drive connection isn't part of the portable backup
         state = imported;
         state.driveSync = keepDriveSync;
+        if (state.version == null) state.version = STATE_VERSION;
         saveState();
+        expandedExerciseId = null;
         render();
-        alert('Backup restored.');
+        showToast('Backup restored.');
       }
     } catch (e) {
       alert('Invalid backup file.');
