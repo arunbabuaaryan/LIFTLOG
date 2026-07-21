@@ -439,9 +439,62 @@ const TEST_STORE_KEY = 'liftlog_v1_test';
 const TEST_MODE_FLAG = 'liftlog_test_mode_active';
 const THEME_KEY = 'liftlog_theme';
 
-// Bumped whenever the shape of `state` changes in a way future code might need
-// to detect (e.g. to migrate an old backup). Doesn't change anything on its own today.
-const SCHEMA_VERSION = 1;
+// ---------- SCHEMA MIGRATIONS ----------
+// The current shape of saved state. Bump this by 1 and add a matching entry
+// to MIGRATIONS below whenever a future change needs to transform old saved
+// data (or the DAYS config layered on top of it) into a new shape.
+const SCHEMA_VERSION = 2;
+
+// Each entry runs exactly once, the first time a state older than its
+// version is loaded — never on every load. They run in ascending order, and
+// each is handed both `state` and the live `days` config array so a
+// migration can touch either. Deliberately self-contained: a migration
+// checks exercise.mode against the literal mode strings that existed at
+// that point in time rather than going through the current EXERCISE_MODES
+// registry, so a migration written today still does the right thing even
+// if a future registry entry changes shape or a mode gets renamed — it's a
+// historical snapshot, not a live dependency.
+//
+// IMPORTANT: never edit a migration that's already shipped — anyone who's
+// already run it has `state.version` past it, so a later edit would only
+// apply to *new* old-data imports, silently diverging from what already ran
+// for existing users. Add a new migration instead.
+const MIGRATIONS = [
+  {
+    version: 2,
+    description: 'Give weighted / weighted-bodyweight exercises a default sets range (3-5) and rep range (8-12) if they predate that config.',
+    migrate(state, days) {
+      days.forEach(day => day.exercises.forEach(ex => {
+        if (ex.mode !== 'weighted' && ex.mode !== 'weighted_bw') return;
+        if (ex.setsMin == null && ex.setsMax == null) {
+          ex.setsMin = DEFAULT_SETS_MIN;
+          ex.setsMax = DEFAULT_SETS_MAX;
+          const live = state.exercises[ex.id];
+          if (live && live.sets != null) live.sets = Math.min(Math.max(live.sets, ex.setsMin), ex.setsMax);
+        }
+        if (!ex._repDefaultApplied) {
+          ex.repLow = DEFAULT_REP_LOW;
+          ex.repHigh = DEFAULT_REP_HIGH;
+          ex._repDefaultApplied = true;
+          const live = state.exercises[ex.id];
+          if (live && live.targetReps != null) live.targetReps = Math.min(Math.max(live.targetReps, ex.repLow), ex.repHigh);
+        }
+      }));
+    }
+  },
+];
+
+// Runs every migration newer than the saved state's version, in order, then
+// stamps the state so they never run again. Safe to call on a brand-new
+// (version-less) state too — it'll just fast-forward straight to current.
+function runMigrations(state, days) {
+  const from = state.version || 1;
+  MIGRATIONS
+    .filter(m => m.version > from)
+    .sort((a, b) => a.version - b.version)
+    .forEach(m => { m.migrate(state, days); state.version = m.version; });
+  if (!state.version) state.version = SCHEMA_VERSION;
+}
 
 function isTestMode() { return localStorage.getItem(TEST_MODE_FLAG) === '1'; }
 function activeStoreKey() { return isTestMode() ? TEST_STORE_KEY : STORE_KEY; }
@@ -483,8 +536,10 @@ function setFocusMode(on) {
 
 function loadState() {
   try {
-    const loaded = JSON.parse(localStorage.getItem(activeStoreKey())) || { exercises:{}, history:[] };
-    if (!loaded.version) loaded.version = SCHEMA_VERSION;
+    const raw = localStorage.getItem(activeStoreKey());
+    if (!raw) return { exercises: {}, history: [], version: SCHEMA_VERSION }; // brand-new install — nothing to migrate
+    const loaded = JSON.parse(raw) || { exercises: {}, history: [] };
+    if (!loaded.version) loaded.version = 1; // existing data that predates the migrations system — oldest known shape
     return loaded;
   }
   catch(e){ return { exercises:{}, history:[], version: SCHEMA_VERSION }; }
@@ -537,33 +592,24 @@ function resetTestData() {
   });
 }
 
-let DAYS = state.customDays || JSON.parse(JSON.stringify(DEFAULT_DAYS));
-DAYS.forEach((d, i) => {
-  if (!d.icon) d.icon = (DEFAULT_DAYS.find(dd => dd.id === d.id) || {}).icon || '⭐';
-  if (!d.color) d.color = (DEFAULT_DAYS.find(dd => dd.id === d.id) || {}).color || DAY_PALETTE[i % DAY_PALETTE.length];
-  d.exercises.forEach(ex => {
-    if ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') && ex.setsMin == null && ex.setsMax == null) {
-      ex.setsMin = DEFAULT_SETS_MIN;
-      ex.setsMax = DEFAULT_SETS_MAX;
-      const live = state.exercises && state.exercises[ex.id];
-      if (live && live.sets != null) {
-        live.sets = Math.min(Math.max(live.sets, ex.setsMin), ex.setsMax);
-      }
-    }
-    // One-time application of the new 8-12 default rep range (increment is auto-derived from repLow).
-    // Flagged so it only runs once and never overwrites edits you make afterward.
-    if ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') && !ex._repDefaultApplied) {
-      ex.repLow = DEFAULT_REP_LOW;
-      ex.repHigh = DEFAULT_REP_HIGH;
-      ex._repDefaultApplied = true;
-      const live = state.exercises && state.exercises[ex.id];
-      if (live && live.targetReps != null) {
-        live.targetReps = Math.min(Math.max(live.targetReps, ex.repLow), ex.repHigh);
-      }
-    }
+// Derives the live DAYS config from state.customDays (or the built-in
+// defaults for a first run), defaults any missing cosmetic fields, and runs
+// migrations. This is the single place that turns "whatever state object we
+// currently have" into a consistent, current-shape DAYS array — called at
+// boot, and again any time `state` gets wholesale-replaced (backup import,
+// Drive restore) so those paths can't drift out of sync with boot-time logic.
+function hydrateDaysFromState() {
+  DAYS = state.customDays || JSON.parse(JSON.stringify(DEFAULT_DAYS));
+  DAYS.forEach((d, i) => {
+    if (!d.icon) d.icon = (DEFAULT_DAYS.find(dd => dd.id === d.id) || {}).icon || '⭐';
+    if (!d.color) d.color = (DEFAULT_DAYS.find(dd => dd.id === d.id) || {}).color || DAY_PALETTE[i % DAY_PALETTE.length];
   });
-});
-state.customDays = DAYS;
+  runMigrations(state, DAYS);
+  state.customDays = DAYS;
+}
+
+let DAYS;
+hydrateDaysFromState();
 saveState();
 
 function persistDays() {
@@ -575,21 +621,196 @@ function getSetsMin(ex) { return ex.setsMin ?? ex.sets; }
 function getSetsMax(ex) { return ex.setsMax ?? (ex.sets + 2); }
 function getRepIncrement(ex) { return (ex.repLow ?? 0) >= 8 ? 2 : 1; }
 
+// ---------- EXERCISE MODE REGISTRY (plugin architecture) ----------
+// This is the one place that knows how each *kind* of exercise behaves.
+// Every other function in the app — state init, target display, the live
+// weight control, the finish/progression engine, PR tracking — reads from
+// here instead of hardcoding its own copy of "if weighted... else if
+// bodyweight...". To add a brand-new exercise type (say, a distance-based
+// "cardio" mode), write one more entry below implementing this interface;
+// nothing else in the app needs to change:
+//
+//   initState(ex)                 -> starting per-exercise progress record, stored in state.exercises[id]
+//   getTargetValue(s)             -> the number a fresh set input defaults to
+//   usesProgressiveSets           -> true if set count lives in state (auto-progresses),
+//                                    false if it's a fixed field on the exercise config itself
+//   label(ex, s)                  -> human-readable "what to do" line shown on the card
+//   hasWeightControl              -> does the live view show a +/- weight control?
+//   weightLabel(ex, s)            -> text inside that control, if hasWeightControl
+//   adjustWeight(ex, s, dir)      -> mutate s for a live +/- weight tap; return {ok, reason}
+//   successCheck(s, arr)          -> did every logged set hit the target?
+//   onSuccess(ex, s)              -> mutate s after a fully-hit session; return {message, leveledUp?}
+//   onFail(ex, s)                 -> mutate s after a missed session; return {message}
+//   sessionBestValue(ex, s, arr)  -> the "how good was this session" number, used for PR checks
+//   historyWeight(ex, s)          -> value written to history.weight (or null if not weight-based)
+//   unit                          -> unit label used in PR records ('lb' | 'sec' | 'reps')
+//   usesWeightAsBest              -> true if historical-best comparisons should use .weight, not .sets
+//
+// Two small shared helpers factor out the identical "reps, then sets" ramp
+// that both weighted modes go through before their mode-specific top tier
+// (a heavier dumbbell vs. more belt weight) — keeping that shared behavior
+// impossible to accidentally let drift apart between the two.
+function progressRepsAndSets(ex, s, repInc) {
+  if (s.targetReps < ex.repHigh) {
+    s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh);
+    return { done: true, message: `Progress: +${repInc} rep(s) next time` };
+  }
+  const setsMax = getSetsMax(ex);
+  if (s.sets < setsMax) {
+    s.sets++;
+    s.targetReps = ex.repLow;
+    return { done: true, message: `Added a set! Now ${s.sets} sets next time` };
+  }
+  return { done: false };
+}
+function deloadRepsOrSets(ex, s, repInc) {
+  const setsMin = getSetsMin(ex);
+  if (s.targetReps > ex.repLow) {
+    s.targetReps = Math.max(ex.repLow, s.targetReps - repInc);
+    return { done: true, message: `Deload: -${repInc} rep(s)` };
+  }
+  if (s.sets > setsMin) {
+    s.sets--;
+    s.targetReps = ex.repLow;
+    return { done: true, message: 'Deload: removed a set' };
+  }
+  return { done: false };
+}
+
+const EXERCISE_MODES = {
+  weighted: {
+    initState: ex => ({ tier: 0, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak: 0 }),
+    getTargetValue: s => s.targetReps,
+    usesProgressiveSets: true,
+    label: (ex, s) => `${WEIGHTS[s.tier]} lb x ${s.targetReps} reps x ${s.sets} sets`,
+    hasWeightControl: true,
+    weightLabel: (ex, s) => `${WEIGHTS[s.tier]} lb`,
+    adjustWeight: (ex, s, dir) => {
+      const newTier = Math.min(Math.max(s.tier + dir, 0), WEIGHTS.length - 1);
+      if (newTier === s.tier) return { ok: false, reason: dir > 0 ? 'Already at your heaviest dumbbell.' : 'Already at your lightest dumbbell.' };
+      s.tier = newTier;
+      return { ok: true };
+    },
+    successCheck: (s, arr) => arr.every(x => x.value >= s.targetReps),
+    onSuccess: (ex, s) => {
+      s.failStreak = 0;
+      const repSet = progressRepsAndSets(ex, s, getRepIncrement(ex));
+      if (repSet.done) return { message: repSet.message };
+      if (s.tier < WEIGHTS.length - 1) {
+        s.tier++; s.sets = getSetsMin(ex); s.targetReps = ex.repLow;
+        return { message: `Weight up! Next: ${WEIGHTS[s.tier]} lb, back to ${getSetsMin(ex)} sets`, leveledUp: true };
+      }
+      return { message: 'Maxed out dumbbells and sets — try slower tempo instead.' };
+    },
+    onFail: (ex, s) => {
+      s.failStreak++;
+      const threshold = getFailThreshold(ex);
+      if (s.failStreak < threshold) return { message: `Missed target (${s.failStreak}/${threshold} before deload)` };
+      s.failStreak = 0;
+      const deload = deloadRepsOrSets(ex, s, getRepIncrement(ex));
+      if (deload.done) return { message: deload.message };
+      if (s.tier > 0) { s.tier--; s.sets = getSetsMin(ex); s.targetReps = ex.repLow; return { message: 'Deload: dropped a weight tier' }; }
+      return { message: '' };
+    },
+    sessionBestValue: (ex, s) => WEIGHTS[s.tier],
+    historyWeight: (ex, s) => WEIGHTS[s.tier],
+    unit: 'lb',
+    usesWeightAsBest: true,
+  },
+  weighted_bw: {
+    initState: ex => ({ addedWeight: 0, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak: 0 }),
+    getTargetValue: s => s.targetReps,
+    usesProgressiveSets: true,
+    label: (ex, s) => (s.addedWeight > 0 ? `Bodyweight +${s.addedWeight} lb` : `Bodyweight`) + ` x ${s.targetReps} reps x ${s.sets} sets`,
+    hasWeightControl: true,
+    weightLabel: (ex, s) => s.addedWeight > 0 ? `+${s.addedWeight} lb` : 'BW',
+    adjustWeight: (ex, s, dir) => {
+      const newWeight = Math.max(0, s.addedWeight + dir * BELT_INCREMENT);
+      if (newWeight === s.addedWeight) return { ok: false, reason: 'Already at bodyweight (0 lb belt).' };
+      s.addedWeight = newWeight;
+      return { ok: true };
+    },
+    successCheck: (s, arr) => arr.every(x => x.value >= s.targetReps),
+    onSuccess: (ex, s) => {
+      s.failStreak = 0;
+      const repSet = progressRepsAndSets(ex, s, getRepIncrement(ex));
+      if (repSet.done) return { message: repSet.message };
+      s.addedWeight += BELT_INCREMENT; s.sets = getSetsMin(ex); s.targetReps = ex.repLow;
+      return { message: `Belt up! Add ${s.addedWeight} lb next time, back to ${getSetsMin(ex)} sets`, leveledUp: true };
+    },
+    onFail: (ex, s) => {
+      s.failStreak++;
+      const threshold = getFailThreshold(ex);
+      if (s.failStreak < threshold) return { message: `Missed target (${s.failStreak}/${threshold} before deload)` };
+      s.failStreak = 0;
+      const deload = deloadRepsOrSets(ex, s, getRepIncrement(ex));
+      if (deload.done) return { message: deload.message };
+      if (s.addedWeight > 0) { s.addedWeight = Math.max(0, s.addedWeight - BELT_INCREMENT); s.sets = getSetsMin(ex); s.targetReps = ex.repLow; return { message: 'Deload: removed belt weight' }; }
+      return { message: '' };
+    },
+    sessionBestValue: (ex, s) => s.addedWeight,
+    historyWeight: (ex, s) => s.addedWeight,
+    unit: 'lb',
+    usesWeightAsBest: true,
+  },
+  bodyweight: {
+    initState: ex => ({ targetReps: ex.startReps, failStreak: 0 }),
+    getTargetValue: s => s.targetReps,
+    usesProgressiveSets: false,
+    label: (ex, s) => `Bodyweight x ${s.targetReps} reps`,
+    hasWeightControl: false,
+    successCheck: (s, arr) => arr.every(x => x.value >= s.targetReps),
+    onSuccess: (ex, s) => { s.failStreak = 0; s.targetReps++; return { message: 'Progress: +1 rep next time' }; },
+    onFail: (ex, s) => {
+      s.failStreak++;
+      const threshold = getFailThreshold(ex);
+      if (s.failStreak >= threshold) { s.failStreak = 0; s.targetReps = Math.max(1, s.targetReps - 2); return { message: 'Deload: -2 reps' }; }
+      return { message: `Missed target (${s.failStreak}/${threshold} before deload)` };
+    },
+    sessionBestValue: (ex, s, arr) => Math.max(...arr.map(x => x.value)),
+    historyWeight: () => null,
+    unit: 'reps',
+    usesWeightAsBest: false,
+  },
+  timed: {
+    initState: ex => ({ targetSeconds: ex.startSeconds, failStreak: 0 }),
+    getTargetValue: s => s.targetSeconds,
+    usesProgressiveSets: false,
+    label: (ex, s) => `Hold ${s.targetSeconds}s`,
+    hasWeightControl: false,
+    successCheck: (s, arr) => arr.every(x => x.value >= s.targetSeconds),
+    stepSize: 5, // +/- taps move 5 seconds at a time instead of 1
+    onSuccess: (ex, s) => { s.failStreak = 0; s.targetSeconds += 10; return { message: 'Progress: +10 sec next time' }; },
+    onFail: (ex, s) => {
+      s.failStreak++;
+      const threshold = getFailThreshold(ex);
+      if (s.failStreak >= threshold) { s.failStreak = 0; s.targetSeconds = Math.max(15, s.targetSeconds - 10); return { message: 'Deload: -10 sec' }; }
+      return { message: `Missed target (${s.failStreak}/${threshold} before deload)` };
+    },
+    sessionBestValue: (ex, s, arr) => Math.max(...arr.map(x => x.value)),
+    historyWeight: () => null,
+    unit: 'sec',
+    usesWeightAsBest: false,
+  },
+};
+
+// Looks up a mode by exercise object or raw mode string. Throws loudly on an
+// unknown mode rather than silently doing nothing — a missing/typo'd mode is
+// a bug worth surfacing immediately, not masking.
+function getExerciseMode(ex) {
+  const key = typeof ex === 'string' ? ex : ex.mode;
+  const def = EXERCISE_MODES[key];
+  if (!def) throw new Error(`Unknown exercise mode "${key}" — add it to EXERCISE_MODES.`);
+  return def;
+}
+
 function getExState(ex) {
   if (!state.exercises[ex.id]) {
-    if (ex.mode === 'weighted') {
-      state.exercises[ex.id] = { tier:0, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak:0 };
-    } else if (ex.mode === 'bodyweight') {
-      state.exercises[ex.id] = { targetReps: ex.startReps, failStreak:0 };
-    } else if (ex.mode === 'weighted_bw') {
-      state.exercises[ex.id] = { addedWeight: 0, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak:0 };
-    } else if (ex.mode === 'timed') {
-      state.exercises[ex.id] = { targetSeconds: ex.startSeconds, failStreak:0 };
-    }
+    state.exercises[ex.id] = getExerciseMode(ex).initState(ex);
   }
   const s = state.exercises[ex.id];
   // Backward compatibility: exercises created before sets-progression existed won't have s.sets yet
-  if ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') && s.sets == null) {
+  if (getExerciseMode(ex).usesProgressiveSets && s.sets == null) {
     s.sets = getSetsMin(ex);
   }
   return s;
@@ -745,7 +966,7 @@ function computeStreak() {
 function getHistoricalMax(exName, mode) {
   const entries = state.history.filter(h => h.exercise === exName);
   if (entries.length === 0) return null;
-  if (mode === 'weighted' || mode === 'weighted_bw') {
+  if (getExerciseMode(mode).usesWeightAsBest) {
     return Math.max(...entries.map(h => h.weight ?? 0));
   }
   return Math.max(...entries.map(h => Math.max(...h.sets)));
@@ -766,7 +987,7 @@ function estimate1RM(weight, reps) {
 function getDaysSinceLastPR(exName, mode) {
   const entries = state.history.filter(h => h.exercise === exName && !h.skipped);
   if (!entries.length) return null;
-  const valueOf = h => (mode === 'weighted' || mode === 'weighted_bw') ? (h.weight ?? 0) : Math.max(...h.sets);
+  const valueOf = h => getExerciseMode(mode).usesWeightAsBest ? (h.weight ?? 0) : Math.max(...h.sets);
   const best = Math.max(...entries.map(valueOf));
   const bestTimes = entries.filter(h => valueOf(h) === best).map(h => new Date(h.date).getTime());
   return Math.floor((Date.now() - Math.max(...bestTimes)) / 86400000);
@@ -1109,16 +1330,14 @@ function getLastValueForSet(ex, setIdx) {
 }
 
 function getTargetValue(ex) {
-  const s = getExState(ex);
-  if (ex.mode === 'timed') return s.targetSeconds;
-  return s.targetReps;
+  return getExerciseMode(ex).getTargetValue(getExState(ex));
 }
 
 function ensureLive(ex) {
   if (!liveSets[ex.id]) {
     const target = getTargetValue(ex);
     const s = getExState(ex);
-    const setCount = (ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets;
+    const setCount = getExerciseMode(ex).usesProgressiveSets ? s.sets : ex.sets;
     liveSets[ex.id] = Array.from({length: setCount}, () => ({ value: target, doneMark: false }));
   }
   return liveSets[ex.id];
@@ -1182,16 +1401,11 @@ function skipExercise(exId) {
 function adjustWeightLive(exId, direction) {
   const ex = getExerciseById(exId);
   if (!ex) return;
+  const mode = getExerciseMode(ex);
+  if (!mode.hasWeightControl) return;
   const s = getExState(ex);
-  if (ex.mode === 'weighted') {
-    const newTier = Math.min(Math.max(s.tier + direction, 0), WEIGHTS.length - 1);
-    if (newTier === s.tier) { alert(direction > 0 ? 'Already at your heaviest dumbbell.' : 'Already at your lightest dumbbell.'); return; }
-    s.tier = newTier;
-  } else if (ex.mode === 'weighted_bw') {
-    const newWeight = Math.max(0, s.addedWeight + direction * BELT_INCREMENT);
-    if (newWeight === s.addedWeight) { alert('Already at bodyweight (0 lb belt).'); return; }
-    s.addedWeight = newWeight;
-  } else return;
+  const result = mode.adjustWeight(ex, s, direction);
+  if (!result.ok) { alert(result.reason); return; }
   saveState();
   if (navigator.vibrate) navigator.vibrate(15);
   render();
@@ -1203,7 +1417,7 @@ function adjustSetsLive(exId, direction) {
   const s = getExState(ex);
   const arr = liveSets[exId];
 
-  if (ex.mode === 'weighted' || ex.mode === 'weighted_bw') {
+  if (getExerciseMode(ex).usesProgressiveSets) {
     const min = getSetsMin(ex), max = getSetsMax(ex);
     const newSets = Math.min(Math.max(s.sets + direction, min), max);
     if (newSets === s.sets) { alert(direction > 0 ? `Sets ceiling is ${max} (change it in Manage → Sets/Reps if you want higher).` : `Sets floor is ${min}.`); return; }
@@ -1321,11 +1535,7 @@ function typeSet(exId, setIdx) {
 }
 
 function targetLabel(ex) {
-  const s = getExState(ex);
-  if (ex.mode === 'weighted') return `${WEIGHTS[s.tier]} lb x ${s.targetReps} reps x ${s.sets} sets`;
-  if (ex.mode === 'weighted_bw') return (s.addedWeight > 0 ? `Bodyweight +${s.addedWeight} lb` : `Bodyweight`) + ` x ${s.targetReps} reps x ${s.sets} sets`;
-  if (ex.mode === 'bodyweight') return `Bodyweight x ${s.targetReps} reps`;
-  if (ex.mode === 'timed') return `Hold ${s.targetSeconds}s`;
+  return getExerciseMode(ex).label(ex, getExState(ex));
 }
 
 function finishExercise(ex) {
@@ -1351,85 +1561,26 @@ function finishExercise(ex) {
 function finishExerciseConfirmed(ex) {
   const arr = liveSets[ex.id];
   if (!arr) { alert('Nothing to log yet.'); return; }
+  const mode = getExerciseMode(ex);
   const s = getExState(ex);
   const preFinishSnapshot = JSON.parse(JSON.stringify(s)); // for Undo
   const arrSnapshot = JSON.parse(JSON.stringify(arr)); // for Undo
   const hasSkippedSet = arr.some(x => x.value === 0);
-  let success;
-  if (ex.mode === 'timed') {
-    success = arr.every(x => x.value >= s.targetSeconds);
-  } else {
-    success = arr.every(x => x.value >= s.targetReps);
-  }
+  const success = mode.successCheck(s, arr);
 
   let statusMsg = '';
   let leveledUp = false;
 
   if (hasSkippedSet) {
     statusMsg = 'Set(s) logged as 0 (skipped) — progression left unchanged this session.';
-  } else if (ex.mode === 'weighted') {
-    const setsMax = getSetsMax(ex), setsMin = getSetsMin(ex);
-    const repInc = getRepIncrement(ex);
-    if (success) {
-      s.failStreak = 0;
-      if (s.targetReps < ex.repHigh) { s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh); statusMsg = `Progress: +${repInc} rep(s) next time`; }
-      else if (s.sets < setsMax) { s.sets++; s.targetReps = ex.repLow; statusMsg = `Added a set! Now ${s.sets} sets next time`; }
-      else if (s.tier < WEIGHTS.length - 1) { s.tier++; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = `Weight up! Next: ${WEIGHTS[s.tier]} lb, back to ${setsMin} sets`; leveledUp = true; }
-      else { statusMsg = 'Maxed out dumbbells and sets — try slower tempo instead.'; }
-    } else {
-      s.failStreak++;
-      const threshold = getFailThreshold(ex);
-      if (s.failStreak >= threshold) {
-        s.failStreak = 0;
-        if (s.targetReps > ex.repLow) { s.targetReps = Math.max(ex.repLow, s.targetReps - repInc); statusMsg = `Deload: -${repInc} rep(s)`; }
-        else if (s.sets > setsMin) { s.sets--; s.targetReps = ex.repLow; statusMsg = 'Deload: removed a set'; }
-        else if (s.tier > 0) { s.tier--; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = 'Deload: dropped a weight tier'; }
-      } else {
-        statusMsg = `Missed target (${s.failStreak}/${threshold} before deload)`;
-      }
-    }
-  } else if (ex.mode === 'weighted_bw') {
-    const setsMax = getSetsMax(ex), setsMin = getSetsMin(ex);
-    const repInc = getRepIncrement(ex);
-    if (success) {
-      s.failStreak = 0;
-      if (s.targetReps < ex.repHigh) { s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh); statusMsg = `Progress: +${repInc} rep(s) next time`; }
-      else if (s.sets < setsMax) { s.sets++; s.targetReps = ex.repLow; statusMsg = `Added a set! Now ${s.sets} sets next time`; }
-      else { s.addedWeight += BELT_INCREMENT; s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = `Belt up! Add ${s.addedWeight} lb next time, back to ${setsMin} sets`; leveledUp = true; }
-    } else {
-      s.failStreak++;
-      const threshold = getFailThreshold(ex);
-      if (s.failStreak >= threshold) {
-        s.failStreak = 0;
-        if (s.targetReps > ex.repLow) { s.targetReps = Math.max(ex.repLow, s.targetReps - repInc); statusMsg = `Deload: -${repInc} rep(s)`; }
-        else if (s.sets > setsMin) { s.sets--; s.targetReps = ex.repLow; statusMsg = 'Deload: removed a set'; }
-        else if (s.addedWeight > 0) { s.addedWeight = Math.max(0, s.addedWeight - BELT_INCREMENT); s.sets = setsMin; s.targetReps = ex.repLow; statusMsg = 'Deload: removed belt weight'; }
-      } else {
-        statusMsg = `Missed target (${s.failStreak}/${threshold} before deload)`;
-      }
-    }
-  } else if (ex.mode === 'bodyweight') {
-    if (success) { s.failStreak = 0; s.targetReps++; statusMsg = 'Progress: +1 rep next time'; }
-    else {
-      s.failStreak++;
-      const threshold = getFailThreshold(ex);
-      if (s.failStreak >= threshold) { s.failStreak = 0; s.targetReps = Math.max(1, s.targetReps - 2); statusMsg = 'Deload: -2 reps'; }
-      else statusMsg = `Missed target (${s.failStreak}/${threshold} before deload)`;
-    }
-  } else if (ex.mode === 'timed') {
-    if (success) { s.failStreak = 0; s.targetSeconds += 10; statusMsg = 'Progress: +10 sec next time'; }
-    else {
-      s.failStreak++;
-      const threshold = getFailThreshold(ex);
-      if (s.failStreak >= threshold) { s.failStreak = 0; s.targetSeconds = Math.max(15, s.targetSeconds - 10); statusMsg = 'Deload: -10 sec'; }
-      else statusMsg = `Missed target (${s.failStreak}/${threshold} before deload)`;
-    }
+  } else {
+    const result = success ? mode.onSuccess(ex, s) : mode.onFail(ex, s);
+    statusMsg = result.message;
+    leveledUp = !!result.leveledUp;
   }
 
   const prevMax = getHistoricalMax(ex.name, ex.mode);
-  const sessionBest = ex.mode === 'weighted' ? WEIGHTS[s.tier]
-    : ex.mode === 'weighted_bw' ? s.addedWeight
-    : Math.max(...arr.map(x => x.value));
+  const sessionBest = mode.sessionBestValue(ex, s, arr);
   const isPR = !hasSkippedSet && prevMax !== null && sessionBest > prevMax;
 
   const activeSession = getActiveSession(DAYS[currentDayIdx].label);
@@ -1441,15 +1592,14 @@ function finishExerciseConfirmed(ex) {
     exercise: ex.name,
     mode: ex.mode,
     sets: arr.map(x => x.value),
-    weight: ex.mode === 'weighted' ? WEIGHTS[s.tier] : (ex.mode === 'weighted_bw' ? s.addedWeight : null),
+    weight: mode.historyWeight(ex, s),
     success,
     skipped: hasSkippedSet
   };
   state.history.push(pushedEntry);
   let prEntry = null;
   if (isPR) {
-    const unit = (ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? 'lb' : (ex.mode === 'timed' ? 'sec' : 'reps');
-    prEntry = recordPR(ex.name, sessionBest, unit);
+    prEntry = recordPR(ex.name, sessionBest, mode.unit);
   }
   saveState();
   lastFinishUndo = { exId: ex.id, exName: ex.name, prevExState: preFinishSnapshot, arr: arrSnapshot, pushedEntry, prEntry };
@@ -1489,7 +1639,7 @@ function showWorkoutCompleteModal(day, mins) {
   const exCount = day.exercises.length;
   const setCount = day.exercises.reduce((sum, ex) => {
     const s = getExState(ex);
-    return sum + ((ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets);
+    return sum + (getExerciseMode(ex).usesProgressiveSets ? s.sets : ex.sets);
   }, 0);
   const durationLabel = mins != null ? formatDuration(mins) : '—';
 
@@ -1638,7 +1788,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
 
   const s = getExState(ex);
   const arr = ensureLive(ex);
-  const step = ex.mode === 'timed' ? 5 : 1;
+  const step = getExerciseMode(ex).stepSize ?? 1;
   const setsHtml = arr.map((set, i) => {
     const isChanged = recentlyChangedSet && recentlyChangedSet.exId === ex.id && recentlyChangedSet.setIdx === i;
     return `<div class="setbox ${set.doneMark?'done':''} ${isChanged?'changed':''}">
@@ -1655,18 +1805,19 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
 
   const badge = s.failStreak > 0 ? `<span class="badge deload">${s.failStreak}/${getFailThreshold(ex)} missed</span>` : `<span class="badge up">on track</span>`;
 
-  const weightControl = (ex.mode === 'weighted' || ex.mode === 'weighted_bw')
+  const exMode = getExerciseMode(ex);
+  const weightControl = exMode.hasWeightControl
     ? `<div class="livectrl">
         <span class="livectrl-label">Weight</span>
         <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', -1)">−</button>
-        <span class="livectrl-val">${ex.mode === 'weighted' ? WEIGHTS[s.tier] + ' lb' : (s.addedWeight > 0 ? '+' + s.addedWeight + ' lb' : 'BW')}</span>
+        <span class="livectrl-val">${exMode.weightLabel(ex, s)}</span>
         <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', 1)">+</button>
       </div>` : '';
 
   const setsControl = `<div class="livectrl">
         <span class="livectrl-label">Sets</span>
         <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', -1)">−</button>
-        <span class="livectrl-val">${(ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? s.sets : ex.sets}</span>
+        <span class="livectrl-val">${exMode.usesProgressiveSets ? s.sets : ex.sets}</span>
         <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', 1)">+</button>
       </div>`;
 
@@ -1869,7 +2020,7 @@ function getAllTimeBests(day) {
   return day.exercises.map(ex => {
     const best = getHistoricalMax(ex.name, ex.mode);
     if (best === null) return null;
-    const unit = (ex.mode === 'weighted' || ex.mode === 'weighted_bw') ? 'lb' : (ex.mode === 'timed' ? 'sec' : 'reps');
+    const unit = getExerciseMode(ex).unit;
     const daysSince = getDaysSinceLastPR(ex.name, ex.mode);
     return { name: ex.name, best, unit, daysSince };
   }).filter(Boolean);
@@ -2834,7 +2985,7 @@ async function restoreFromDriveNow() {
         state = imported;
         state.driveSync = keepDriveSync;
         state.driveSync.lastSync = new Date().toISOString();
-        if (!state.version) state.version = SCHEMA_VERSION;
+        hydrateDaysFromState(); // runs any migrations this backup needs and refreshes DAYS to match
         saveState();
         render();
         alert('✅ Restored from Google Drive.');
@@ -3010,7 +3161,7 @@ function importBackup(event) {
           const keepDriveSync = state.driveSync; // this device's Drive connection isn't part of the portable backup
           state = imported;
           state.driveSync = keepDriveSync;
-          if (!state.version) state.version = SCHEMA_VERSION;
+          hydrateDaysFromState(); // runs any migrations this backup needs and refreshes DAYS to match
           saveState();
           render();
           alert('Backup restored.');
