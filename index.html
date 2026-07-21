@@ -1241,7 +1241,22 @@ function setView(v) {
   view = v;
   document.querySelectorAll('.navbtn').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   if (v === 'workout') requestWakeLock(); else releaseWakeLock();
+  if (v === 'manage') warmDriveTokenIfNeeded();
   render();
+}
+
+// Best-effort, fire-and-forget attempt to silently refresh the Drive token
+// when Settings is opened — never automatically during a workout. If
+// Google's "silent" refresh (prompt:'') needs to fall back to a visible
+// sign-in screen, this is a reasonable place for that: the person just
+// deliberately navigated to Drive-related settings. Having a warm token
+// here is also what makes the end-of-workout sync actually able to fire
+// without needing to touch Google at that moment.
+function warmDriveTokenIfNeeded() {
+  const ds = getDriveSyncState();
+  if (ds.connected && !driveAccessToken) {
+    silentDriveAuth().then(() => render());
+  }
 }
 
 // ---------- MISTAKE-PROOFING ----------
@@ -1607,13 +1622,16 @@ function finishExerciseConfirmed(ex) {
   delete liveSets[ex.id];
   redoUnlocked.delete(ex.id); // back to locked/read-only after this log, even if this was a redo
   if (focusOverrideId === ex.id) focusOverrideId = null; // let focus mode auto-advance to the next incomplete exercise
-  maybePromptBackup();
   render();
   const dayHasMoreToday = DAYS[currentDayIdx].exercises.some(e => !isDoneToday(e.name, DAYS[currentDayIdx].label));
   if (dayHasMoreToday) {
     startRestTimer(ex.transitionRest ?? TRANSITION_REST_SECONDS); // rest before moving to the next exercise
   } else {
-    // Every exercise in this group is done — the workout is complete.
+    // Every exercise in this group is done — the workout is complete. This is
+    // the one point per workout where a backup gets attempted, rather than
+    // after every single exercise — less noisy, and it means any (safe,
+    // non-interruptive) Drive sync happens once you've actually wrapped up.
+    maybePromptBackup();
     const { anchorDate, sessionNum } = getActiveSession(DAYS[currentDayIdx].label);
     const mins = getSessionDuration(anchorDate, DAYS[currentDayIdx].label, sessionNum);
     if (WORKOUT_FLOW.showCompletionModal) {
@@ -3129,17 +3147,19 @@ function maybePromptBackup() {
   const hoursSince = last ? (Date.now() - last) / 3600000 : Infinity;
   if (hoursSince >= 20) {
     const ds = getDriveSyncState();
-    if (ds.connected) {
-      // Drive sync overwrites one single cloud file, so it never clutters your
-      // phone. Once connected, rely on it for the automatic backup and skip
-      // the local Downloads-folder download entirely (that one DOES accumulate
-      // a new dated file each time, since browsers can't truly overwrite a
-      // downloaded file on Android/iOS).
+    // Only sync automatically if a Drive token is already sitting in memory
+    // from something the person did explicitly earlier this session (opened
+    // Settings, tapped Connect/Sync). Never attempt to silently *acquire* one
+    // here. Google's "silent" token refresh (prompt:'') isn't reliably
+    // invisible in every browser/PWA context — it can still surface a real
+    // sign-in screen, which is exactly what was popping up mid-workout every
+    // time the token had expired since the last time the app was open.
+    if (ds.connected && driveAccessToken) {
       driveSyncNow(true).then(() => render());
       state.meta.lastBackup = new Date().toISOString();
       saveState();
     } else {
-      silentAutoBackup(); // no Drive connected — fall back to a local download so at least one backup exists
+      silentAutoBackup(); // no live Drive session right now — fall back to a local download so at least one backup exists
     }
   }
 }
