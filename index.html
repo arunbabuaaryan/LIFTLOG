@@ -937,24 +937,32 @@ function getWeekKey(date) {
   return dateStr(d);
 }
 
-const WEEKLY_MIN_DAYS = 3;
+const WEEKLY_MIN_GROUPS = 3;
 
-function getWeekWorkoutDayCount(weekKey) {
-  const daysInWeek = new Set(
-    state.history.filter(h => getWeekKey(h.date) === weekKey).map(h => getEntryDateKey(h))
+// Counts distinct (calendar date, muscle group) pairs logged in the given
+// week — i.e. how many muscle-group workouts got done, not how many separate
+// calendar days you happened to train on. Doing two different groups back to
+// back on one day counts as 2 here, same as doing them on two separate days
+// would; doing the same group twice in one day (an extra session) still only
+// counts once, since it's still just one muscle group worked that day.
+function getWeekWorkoutGroupCount(weekKey) {
+  const groupsInWeek = new Set(
+    state.history
+      .filter(h => getWeekKey(h.date) === weekKey)
+      .map(h => `${getEntryDateKey(h)}::${h.day}`)
   );
-  return daysInWeek.size;
+  return groupsInWeek.size;
 }
 
 function computeStreak() {
   let cursorWeek = getWeekKey(new Date());
-  if (getWeekWorkoutDayCount(cursorWeek) < WEEKLY_MIN_DAYS) {
+  if (getWeekWorkoutGroupCount(cursorWeek) < WEEKLY_MIN_GROUPS) {
     const d = new Date(cursorWeek);
     d.setDate(d.getDate() - 7);
     cursorWeek = getWeekKey(d); // grace: this week isn't over yet, don't count it as a break
   }
   let count = 0;
-  while (getWeekWorkoutDayCount(cursorWeek) >= WEEKLY_MIN_DAYS) {
+  while (getWeekWorkoutGroupCount(cursorWeek) >= WEEKLY_MIN_GROUPS) {
     count++;
     const d = new Date(cursorWeek);
     d.setDate(d.getDate() - 7);
@@ -1489,7 +1497,18 @@ function markSetDone(exId, setIdx) {
   const set = arr[setIdx];
   set.doneMark = !set.doneMark;
   if (set.doneMark) {
-    startTimerFor(exId);
+    // If this set finishes off the exercise AND every other exercise today is
+    // already done, the whole workout is about to complete — there's nothing
+    // left to rest for, so skip the timer instead of leaving one running with
+    // no next set/exercise for it to lead into.
+    const allSetsInThisExDone = arr.every(x => x.doneMark);
+    const otherExercisesRemain = DAYS[currentDayIdx].exercises.some(e => e.id !== exId && !isDoneToday(e.name, DAYS[currentDayIdx].label));
+    const isFinalSetOfWorkout = allSetsInThisExDone && !otherExercisesRemain;
+    if (isFinalSetOfWorkout) {
+      skipTimer(); // clear out any timer still running from an earlier set of this exercise — nothing left to rest for
+    } else {
+      startTimerFor(exId);
+    }
     markSessionStartIfNeeded();
     if (navigator.vibrate) navigator.vibrate(15);
   } else {
@@ -1924,8 +1943,8 @@ function renderWorkout() {
   const streakEl = document.getElementById('streakBadge');
   if (streakEl) {
     const streak = computeStreak();
-    const thisWeek = getWeekWorkoutDayCount(getWeekKey(new Date()));
-    const weekPart = `${thisWeek}/${DAYS.length} days this week`;
+    const thisWeek = getWeekWorkoutGroupCount(getWeekKey(new Date()));
+    const weekPart = `${thisWeek}/${DAYS.length} muscle groups this week`;
     streakEl.textContent = streak > 0 ? `🔥 ${streak} week streak · ${weekPart}` : weekPart;
   }
 
