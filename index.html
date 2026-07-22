@@ -198,6 +198,7 @@
     background: var(--surface); border: 1px solid var(--border-strong); border-radius: 22px;
     padding: 28px 24px 24px; max-width: 340px; width: 100%; text-align: center;
     box-shadow: 0 20px 60px rgba(0,0,0,.4); animation: winPop .35s cubic-bezier(.2,.9,.3,1.2);
+    max-height: 88vh; overflow-y: auto; position: relative;
   }
   @keyframes winPop { from { opacity: 0; transform: scale(.85) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
   .win-emoji { font-size: 46px; line-height: 1; margin-bottom: 6px; }
@@ -354,6 +355,69 @@
   .undo-toast button {
     background: none; border: none; color: var(--accent); font-weight: 700; font-size: 13.5px;
     cursor: pointer; padding: 4px 6px;
+  }
+  /* ---- Today-at-a-Glance dashboard header ---- */
+  .dash-header { background: linear-gradient(165deg, var(--header-grad-a), var(--surface)); }
+  .dash-top-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .dash-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase; color: var(--text-faint); margin-bottom: 4px; }
+  .dash-summary { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; max-width: 230px; }
+  .dash-score { flex: 0 0 auto; }
+  .dash-score-ring {
+    width: 54px; height: 54px; border-radius: 50%; flex: 0 0 auto;
+    background: conic-gradient(var(--accent) var(--score-pct), var(--ring-track) 0);
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.6s ease;
+  }
+  .dash-score-inner {
+    width: 42px; height: 42px; border-radius: 50%; background: var(--surface);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .dash-score-val { font-size: 14px; font-weight: 800; line-height: 1; }
+  .dash-score-grade { font-size: 8.5px; font-weight: 700; color: var(--text-faint); margin-top: 1px; }
+  .dash-progress-track { height: 6px; background: var(--surface-raised); border-radius: 3px; overflow: hidden; margin: 14px 0 14px; }
+  .dash-progress-fill { height: 100%; border-radius: 3px; transition: width .5s cubic-bezier(.2,.8,.3,1); }
+  .dash-metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 8px; }
+  .dash-metric-label { font-size: 9.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--text-faint); margin-bottom: 2px; }
+  .dash-metric-val { font-size: 13.5px; font-weight: 800; letter-spacing: -0.01em; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+  /* ---- Prediction settings mini-panel ---- */
+  .pred-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .pred-toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; font-size: 13px; color: var(--text-dim); }
+  .pred-switch { width: 38px; height: 22px; border-radius: 11px; background: var(--surface-raised); border: 1px solid var(--border-strong); position: relative; transition: background .2s ease; flex: 0 0 auto; }
+  .pred-switch.on { background: var(--accent); border-color: transparent; }
+  .pred-switch-knob { width: 16px; height: 16px; border-radius: 50%; background: #fff; position: absolute; top: 2px; left: 2px; transition: transform .2s cubic-bezier(.3,.8,.4,1); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .pred-switch.on .pred-switch-knob { transform: translateX(16px); }
+
+  /* ---- Future prediction projection cards ---- */
+  .proj-cards-label { font-size: 12px; font-weight: 700; color: var(--text-dim); margin: 16px 0 8px; }
+  .proj-cards-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .proj-card { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 12px; padding: 10px 11px; }
+  .proj-card-h { font-size: 10px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; color: var(--text-faint); }
+  .proj-card-primary { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; margin-top: 3px; }
+  .proj-card-delta { font-size: 11px; font-weight: 700; color: var(--success); margin-top: 1px; }
+  .proj-card-sub { font-size: 10.5px; color: var(--text-faint); margin-top: 3px; }
+  .proj-card-conf { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-dim); margin-top: 6px; font-weight: 600; }
+  .proj-conf-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .pred-insights { margin-top: 12px; }
+  .pred-insight-row { font-size: 12px; color: var(--text-dim); line-height: 1.4; padding: 6px 0; border-top: 1px solid var(--border); }
+  .pred-insight-row:first-child { border-top: none; }
+
+  /* ---- Completion modal: score ring + confetti ---- */
+  .win-ring-wrap { position: relative; width: 80px; height: 80px; margin: 0 auto 8px; }
+  .win-ring-svg { width: 80px; height: 80px; transform: rotate(-90deg); }
+  .win-ring-track { fill: none; stroke: var(--ring-track); stroke-width: 7; }
+  .win-ring-fill { fill: none; stroke: var(--accent); stroke-width: 7; stroke-linecap: round; }
+  .win-ring-grade { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 800; }
+  .win-recovery { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .win-pred-update { font-size: 12px; color: var(--text-dim); margin-top: 10px; padding: 10px; background: var(--surface-raised); border-radius: 10px; text-align: left; line-height: 1.4; }
+  .confetti-piece {
+    position: absolute; top: -10px; width: 8px; height: 8px; opacity: .9;
+    animation-name: confettiFall; animation-timing-function: ease-in; animation-fill-mode: forwards;
+    pointer-events: none;
+  }
+  @keyframes confettiFall {
+    0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+    100% { transform: translateY(340px) rotate(540deg); opacity: 0; }
   }
 </style>
 </head>
@@ -522,6 +586,34 @@ const WORKOUT_FLOW = {
   upNextPreviewCount: 1,     // how many upcoming exercises to preview under the active card
   showCompletionModal: true, // show the full-screen summary when a workout group is finished
 };
+
+// ---------- PREDICTION SETTINGS ----------
+// User-configurable knobs for the Future Progress Prediction feature. Stored
+// per-device (like theme/focus mode) rather than in the synced workout
+// state — predictions are a display preference, not workout data.
+const PREDICTION_SETTINGS_KEY = 'liftlog_prediction_settings';
+const PREDICTION_MODE_MULTIPLIERS = { conservative: 0.65, normal: 1, aggressive: 1.4 };
+const DEFAULT_PREDICTION_SETTINGS = {
+  enabled: true,
+  mode: 'normal',        // 'conservative' | 'normal' | 'aggressive'
+  showConfidence: true,
+  showMilestones: true,
+  showFutureLine: true,
+};
+function getPredictionSettings() {
+  try {
+    const raw = localStorage.getItem(PREDICTION_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_PREDICTION_SETTINGS };
+    return { ...DEFAULT_PREDICTION_SETTINGS, ...JSON.parse(raw) };
+  } catch (e) { return { ...DEFAULT_PREDICTION_SETTINGS }; }
+}
+function setPredictionSetting(key, value) {
+  const s = getPredictionSettings();
+  s[key] = value;
+  localStorage.setItem(PREDICTION_SETTINGS_KEY, JSON.stringify(s));
+  predictionCache.clear(); // settings change invalidates any cached projection
+  renderPreservingScroll();
+}
 
 // Focus Mode: guided, one-exercise-at-a-time flow (default). List Mode shows
 // the classic full scrolling list. Stored per-device like the theme preference.
@@ -988,6 +1080,193 @@ function getHistoricalMax(exName, mode) {
 function estimate1RM(weight, reps) {
   if (!weight || !reps) return 0;
   return Math.round(weight * (1 + reps / 30));
+}
+
+// ---------- PREDICTION ENGINE ----------
+// Reusable forecasting layer built entirely on top of data the app already
+// tracks (state.history, EXERCISE_MODES, WEIGHTS). Nothing here duplicates
+// the live progression algorithm in EXERCISE_MODES — it observes the
+// *outcomes* of that algorithm over time (weight/e1rm/volume per logged
+// session) and projects them forward. Every prediction is cached and only
+// recomputed when history/settings actually change (see predictionCache).
+const predictionCache = new Map();
+
+// How many real-world days a given exercise's sessions have actually
+// averaged, based on this specific exercise's own log — the true cadence,
+// not an assumption about the day rotation. Falls back to 7 (weekly) if
+// there isn't enough history to measure yet.
+function getExerciseCadenceDays(exName) {
+  const dates = state.history
+    .filter(h => h.exercise === exName && !h.skipped)
+    .map(h => new Date(getEntryDateKey(h)).getTime())
+    .sort((a,b) => a-b);
+  const uniq = [...new Set(dates)];
+  if (uniq.length < 2) return 7;
+  const gaps = [];
+  for (let i = 1; i < uniq.length; i++) gaps.push((uniq[i]-uniq[i-1]) / 86400000);
+  gaps.sort((a,b)=>a-b);
+  const mid = Math.floor(gaps.length/2);
+  const median = gaps.length % 2 ? gaps[mid] : (gaps[mid-1]+gaps[mid])/2; // median resists one long injury/vacation gap skewing the average
+  return Math.min(Math.max(median, 3), 21); // clamp to a sane 3-21 day range
+}
+
+// Consistency: fraction of the last 60 days where this exercise was actually
+// trained on roughly the cadence it's supposed to be, vs. how many sessions
+// *should* have happened at that cadence. 1.0 = right on pace, lower = missed
+// sessions are dragging on the trend.
+function getExerciseConsistency(exName) {
+  const cadence = getExerciseCadenceDays(exName);
+  const cutoff = Date.now() - 60 * 86400000;
+  const recentSessions = new Set(
+    state.history.filter(h => h.exercise === exName && !h.skipped && new Date(getEntryDateKey(h)).getTime() >= cutoff)
+      .map(h => getEntryDateKey(h))
+  ).size;
+  const expected = Math.max(1, Math.round(60 / cadence));
+  return Math.min(1, recentSessions / expected);
+}
+
+// Recency-weighted linear regression: recent sessions influence the slope
+// more than old ones, so a plateau in the last month pulls the trend down
+// even if early progress was fast. Returns null if there's not enough
+// signal to trust a trend yet.
+function weightedTrend(values) {
+  const n = values.length;
+  if (n < 3) return null;
+  const weights = values.map((_, i) => 0.5 + (i / (n - 1)) * 1.5); // oldest=0.5x, newest=2x
+  const wSum = weights.reduce((a,b)=>a+b, 0);
+  const xMean = values.reduce((s,_,i) => s + i * weights[i], 0) / wSum;
+  const yMean = values.reduce((s,v,i) => s + v * weights[i], 0) / wSum;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += weights[i] * (i - xMean) * (values[i] - yMean);
+    den += weights[i] * (i - xMean) ** 2;
+  }
+  const slope = den !== 0 ? num / den : 0;
+  const intercept = yMean - slope * xMean;
+  // R^2 (weighted) — how well a straight line actually explains the data,
+  // used to temper confidence when the trend is noisy.
+  let ssRes = 0, ssTot = 0;
+  for (let i = 0; i < n; i++) {
+    const pred = intercept + slope * i;
+    ssRes += weights[i] * (values[i] - pred) ** 2;
+    ssTot += weights[i] * (values[i] - yMean) ** 2;
+  }
+  const r2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : (slope === 0 ? 1 : 0);
+  return { slope, intercept, r2, n };
+}
+
+// The core forecast for one exercise. Projects estimated-1RM (and derives
+// working weight / volume / confidence from it) at each horizon in
+// `horizonsMonths`. Growth is asymptotic, not linear — it slows the further
+// out it goes, the way real strength adaptation does — and is scaled by how
+// consistently the person actually trains this exercise and by the
+// Conservative/Normal/Aggressive setting. Equipment ceilings are respected
+// for fixed-dumbbell 'weighted' exercises.
+function predictExercise(ex, horizonsMonths = [3, 6, 12, 24]) {
+  const settings = getPredictionSettings();
+  const cacheKey = `${ex.id}::${horizonsMonths.join(',')}::${settings.mode}::${state.history.length}`;
+  if (predictionCache.has(cacheKey)) return predictionCache.get(cacheKey);
+
+  const mode = getExerciseMode(ex);
+  const supportsWeight = ex.mode === 'weighted' || ex.mode === 'weighted_bw';
+  const points = state.history
+    .filter(h => h.exercise === ex.name && !h.skipped)
+    .sort((a,b) => new Date(a.date) - new Date(b.date));
+
+  if (points.length < 3) { predictionCache.set(cacheKey, null); return null; }
+
+  const e1rmSeries = points.map(p => supportsWeight ? estimate1RM(p.weight || 0, Math.max(...p.sets)) : Math.max(...p.sets));
+  const trend = weightedTrend(e1rmSeries);
+  if (!trend) { predictionCache.set(cacheKey, null); return null; }
+
+  const currentE1rm = e1rmSeries[e1rmSeries.length - 1];
+  const cadenceDays = getExerciseCadenceDays(ex.name);
+  const sessionsPerMonth = 30 / cadenceDays;
+  const consistency = getExerciseConsistency(ex.name);
+  const modeMult = PREDICTION_MODE_MULTIPLIERS[settings.mode] ?? 1;
+
+  // Per-calendar-month growth rate implied by the per-session slope, damped
+  // by how consistently sessions are actually happening (miss workouts,
+  // growth slows) and by the aggressiveness setting.
+  const monthlyGrowth = Math.max(0, trend.slope) * sessionsPerMonth * consistency * modeMult;
+
+  // Training-age proxy: more logged sessions for this exercise = a more
+  // mature trend = growth saturates a bit slower (longer tau). Ranges
+  // roughly 6 (brand new trend) to 18 (long track record) months.
+  const tau = Math.min(18, 6 + points.length * 0.35);
+
+  const equipCeiling = ex.mode === 'weighted' ? estimate1RM(WEIGHTS[WEIGHTS.length-1], ex.repHigh || 12) : null;
+
+  const projections = horizonsMonths.map(t => {
+    // Asymptotic (diminishing-returns) growth curve: fast early, naturally
+    // flattening — never a straight line extrapolated forever.
+    const growthPotential = monthlyGrowth * tau;
+    let predictedE1rm = currentE1rm + growthPotential * (1 - Math.exp(-t / tau));
+    if (equipCeiling) predictedE1rm = Math.min(predictedE1rm, equipCeiling);
+    predictedE1rm = Math.round(Math.max(predictedE1rm, currentE1rm));
+
+    // Confidence: starts high, decays with horizon, and is scaled down by
+    // trend noise (r^2), how little data backs the trend, and inconsistent
+    // training. Floors at 25% so it's never presented as a false certainty.
+    const horizonDecay = Math.exp(-t / 30); // ~95% at 3mo, ~82% at 12mo, ~70% at 21mo-ish shape
+    const dataQuality = Math.min(1, points.length / 12) * (0.55 + 0.45 * trend.r2);
+    const confidence = Math.round(Math.max(25, Math.min(97, 100 * horizonDecay * (0.5 + 0.5 * dataQuality) * (0.6 + 0.4 * consistency))));
+
+    // Derive the mode-specific "working weight" from the predicted e1rm
+    // using the inverse of the same Epley formula the rest of the app uses,
+    // assuming reps stay near the exercise's target rep ceiling.
+    const targetReps = ex.repHigh || (points[points.length-1].sets ? Math.max(...points[points.length-1].sets) : 10);
+    let predictedWorkingWeight = supportsWeight ? Math.round(predictedE1rm / (1 + targetReps / 30)) : null;
+    if (ex.mode === 'weighted') predictedWorkingWeight = WEIGHTS.reduce((best,w) => Math.abs(w-predictedWorkingWeight) < Math.abs(best-predictedWorkingWeight) ? w : best, WEIGHTS[0]);
+
+    const currentWorkingWeight = supportsWeight ? (points[points.length-1].weight || 0) : null;
+
+    return {
+      months: t,
+      predictedE1rm,
+      predictedWorkingWeight,
+      currentWorkingWeight,
+      deltaWorkingWeight: predictedWorkingWeight != null && currentWorkingWeight != null ? predictedWorkingWeight - currentWorkingWeight : null,
+      progressPct: currentE1rm > 0 ? Math.round(((predictedE1rm - currentE1rm) / currentE1rm) * 100) : 0,
+      confidence,
+      atCeiling: equipCeiling != null && predictedE1rm >= equipCeiling,
+    };
+  });
+
+  const result = { exId: ex.id, exName: ex.name, unit: mode.unit, currentE1rm, trend, consistency, cadenceDays, sessionsPerMonth, projections };
+  predictionCache.set(cacheKey, result);
+  return result;
+}
+
+// Plain-language, data-grounded observations. Every sentence here is derived
+// directly from predictExercise()/consistency data — nothing is invented if
+// the underlying numbers aren't available.
+function generatePredictionInsights(ex) {
+  const p = predictExercise(ex);
+  const insights = [];
+  if (!p) return insights;
+  const settings = getPredictionSettings();
+
+  const twelveMo = p.projections.find(x => x.months === 12);
+  const threeMo = p.projections.find(x => x.months === 3);
+  if (twelveMo && twelveMo.progressPct > 0) {
+    insights.push(`At your current consistency, ${ex.name} is projected to gain ~${twelveMo.progressPct}% estimated strength over the next year.`);
+  }
+  if (p.consistency < 0.8 && p.consistency > 0) {
+    const missedPenaltyMonths = Math.round((1 - p.consistency) * 8);
+    if (missedPenaltyMonths >= 1) {
+      insights.push(`Training this ${Math.round(p.consistency*100)}% as often as your usual pace is likely delaying milestones by roughly ${missedPenaltyMonths} month${missedPenaltyMonths===1?'':'s'} — closing that gap would speed things up.`);
+    }
+  } else if (p.consistency >= 0.95) {
+    insights.push(`You're training ${ex.name} right on pace — that consistency is a bigger driver of this projection than the growth rate itself.`);
+  }
+  if (ex.mode === 'weighted' && threeMo && threeMo.atCeiling) {
+    insights.push(`${ex.name} is projected to hit your equipment ceiling (${WEIGHTS[WEIGHTS.length-1]} lb) within 3 months — future gains there will need higher reps or slower tempo, not heavier dumbbells.`);
+  }
+  if (p.trend.r2 < 0.35 && p.trend.n >= 5) {
+    insights.push(`${ex.name}'s recent numbers are fairly noisy session-to-session, so treat these projections as a rough direction rather than a precise date.`);
+  }
+  return insights.slice(0, 3);
 }
 
 // How long ago the current all-time best for this exercise was last hit (not
@@ -1628,7 +1907,8 @@ function finishExerciseConfirmed(ex) {
     sets: arr.map(x => x.value),
     weight: mode.historyWeight(ex, s),
     success,
-    skipped: hasSkippedSet
+    skipped: hasSkippedSet,
+    isPR
   };
   state.history.push(pushedEntry);
   let prEntry = null;
@@ -1667,10 +1947,58 @@ function finishExerciseConfirmed(ex) {
   }
 }
 
+// Longest-streak tracking, used only to decide whether the completion modal's
+// confetti should fire. Stored in state.meta alongside the existing backup
+// metadata fields — same pattern, no new top-level state shape.
+function checkAndUpdateLongestStreak(streak) {
+  state.meta = state.meta || {};
+  const prevBest = state.meta.longestStreak || 0;
+  const isNewBest = streak > 0 && streak > prevBest;
+  if (isNewBest) { state.meta.longestStreak = streak; saveState(); }
+  return isNewBest;
+}
+
+// Lightweight count-up animation for the modal's stat numbers — 0 to target
+// over ~700ms with an ease-out curve. Pure DOM/rAF, no dependency added.
+function animateCountUp(el, target, { suffix = '', duration = 700 } = {}) {
+  if (!el || !isFinite(target)) return;
+  const start = performance.now();
+  const from = 0;
+  function tick(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const val = Math.round(from + (target - from) * eased);
+    el.textContent = val.toLocaleString() + suffix;
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// Minimal CSS-confetti burst — plain divs animated via the confettiFall
+// keyframes in <style>, removed after they finish falling. Only ever called
+// for the three "worth celebrating" moments (new PR / new longest streak /
+// 100% completion is implicit here since this modal only shows on full
+// completion) so it never turns into visual noise on every workout.
+function spawnConfetti(container) {
+  const colors = ['#4f7cff', '#ff6b4a', '#3ecf6e', '#b06bff', '#ffcb4a'];
+  for (let i = 0; i < 26; i++) {
+    const piece = document.createElement('div');
+    piece.className = 'confetti-piece';
+    piece.style.left = Math.random() * 100 + '%';
+    piece.style.background = colors[i % colors.length];
+    piece.style.animationDelay = (Math.random() * 0.3) + 's';
+    piece.style.animationDuration = (1.6 + Math.random() * 0.9) + 's';
+    piece.style.transform = `rotate(${Math.random()*360}deg)`;
+    container.appendChild(piece);
+    setTimeout(() => piece.remove(), 3000);
+  }
+}
+
 // Full-screen celebration shown the moment every exercise in a workout group
-// is finished — states the elapsed duration so the person never has to go
-// hunting for it in History. Purely presentational: reads already-computed
-// stats, writes nothing to state.
+// is finished. Reads already-computed stats plus the same dashboard/prediction
+// helpers the Progress page uses (getOverallConsistencyPct, computeStreak,
+// computeWorkoutScore, predictExercise) — nothing here recomputes logic that
+// already exists elsewhere.
 function showWorkoutCompleteModal(day, mins) {
   document.getElementById('winModalOverlay')?.remove();
   const exCount = day.exercises.length;
@@ -1680,26 +2008,86 @@ function showWorkoutCompleteModal(day, mins) {
   }, 0);
   const durationLabel = mins != null ? formatDuration(mins) : '—';
 
+  const { anchorDate, sessionNum } = getActiveSession(day.label);
+  const todaysEntries = state.history.filter(h => getEntryDateKey(h) === anchorDate && h.day === day.label && getEntrySessionNum(h) === sessionNum);
+  const totalVolume = Math.round(todaysEntries.reduce((sum, h) => sum + (h.weight && !h.skipped ? h.weight * h.sets.reduce((a,b)=>a+b,0) : 0), 0));
+  const prsBroken = todaysEntries.filter(h => h.isPR).length;
+  const avgRestSeconds = Math.round(day.exercises.reduce((sum, ex) => sum + (ex.rest || 60), 0) / Math.max(1, day.exercises.length));
+  // Rough, clearly-labeled estimate only (≈6 kcal/min is a typical moderate
+  // resistance-training MET value) — not a substitute for a real metabolic measurement.
+  const estCalories = mins != null ? Math.round(mins * 6) : null;
+
+  const consistencyPct = getOverallConsistencyPct();
+  const streak = computeStreak();
+  const isNewLongestStreak = checkAndUpdateLongestStreak(streak);
+  const recovery = getRecoveryStatus(day.label);
+  const score = computeWorkoutScore({ completionPct: 100, consistencyPct, streak, prsToday: prsBroken });
+  const grade = scoreToGrade(score);
+
+  // If this exercise-day has a weighted lift with an established trend,
+  // surface how today's session moved its projection — reuses predictExercise,
+  // nothing recomputed.
+  const trendEx = day.exercises.find(ex => (ex.mode === 'weighted' || ex.mode === 'weighted_bw') && predictExercise(ex));
+  const trendPred = trendEx ? predictExercise(trendEx) : null;
+  const trend3mo = trendPred ? trendPred.projections.find(p => p.months === 3) : null;
+
   const overlay = document.createElement('div');
   overlay.className = 'win-overlay';
   overlay.id = 'winModalOverlay';
   overlay.innerHTML = `
     <div class="win-modal">
-      <div class="win-emoji">🎉</div>
+      <div class="win-emoji" id="winEmoji">✓</div>
+      <div class="win-ring-wrap"><svg class="win-ring-svg" viewBox="0 0 80 80">
+        <circle cx="40" cy="40" r="34" class="win-ring-track"/>
+        <circle cx="40" cy="40" r="34" class="win-ring-fill" id="winRingFill"/>
+      </svg><div class="win-ring-grade">${grade}</div></div>
       <h3 class="win-title">${escapeHtml(day.label)} complete!</h3>
-      <div class="win-sub">Nice work — every exercise logged.</div>
+      <div class="win-sub">Nice work — every exercise logged. Workout score ${score}/100.</div>
       <div class="win-stats">
-        <div class="win-stat"><div class="win-stat-val">${durationLabel}</div><div class="win-stat-label">Duration</div></div>
-        <div class="win-stat"><div class="win-stat-val">${exCount}</div><div class="win-stat-label">Exercises</div></div>
-        <div class="win-stat"><div class="win-stat-val">${setCount}</div><div class="win-stat-label">Sets</div></div>
+        <div class="win-stat"><div class="win-stat-val" id="winDuration">—</div><div class="win-stat-label">Duration</div></div>
+        <div class="win-stat"><div class="win-stat-val" id="winExCount">0</div><div class="win-stat-label">Exercises</div></div>
+        <div class="win-stat"><div class="win-stat-val" id="winSetCount">0</div><div class="win-stat-label">Sets</div></div>
       </div>
-      <button class="btn" style="width:100%;" id="winModalCloseBtn">Nice!</button>
+      <div class="win-stats">
+        <div class="win-stat"><div class="win-stat-val" id="winVolume">0</div><div class="win-stat-label">Volume (lb)</div></div>
+        <div class="win-stat"><div class="win-stat-val">${formatDuration(Math.round(avgRestSeconds/60)) === '0 min' ? avgRestSeconds+'s' : formatDuration(Math.round(avgRestSeconds/60))}</div><div class="win-stat-label">Avg Rest</div></div>
+        <div class="win-stat"><div class="win-stat-val" id="winCalories">0</div><div class="win-stat-label">Est. Calories</div></div>
+      </div>
+      <div class="win-stats">
+        <div class="win-stat"><div class="win-stat-val">${prsBroken}${prsBroken ? ' 🏆' : ''}</div><div class="win-stat-label">PRs Broken</div></div>
+        <div class="win-stat"><div class="win-stat-val">${consistencyPct != null ? consistencyPct+'%' : '—'}</div><div class="win-stat-label">Consistency</div></div>
+        <div class="win-stat"><div class="win-stat-val">${streak}w 🔥</div><div class="win-stat-label">Streak${isNewLongestStreak ? ' (best!)' : ''}</div></div>
+      </div>
+      <div class="win-recovery">Recovery: <strong>${recovery.label}</strong></div>
+      ${trend3mo ? `<div class="win-pred-update">🔮 Updated projection — ${escapeHtml(trendEx.name)}: ~${trend3mo.predictedWorkingWeight} lb in 3 months (${trend3mo.confidence}% confidence)</div>` : ''}
+      <button class="btn" style="width:100%; margin-top:14px;" id="winModalCloseBtn">Nice!</button>
     </div>`;
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
   overlay.querySelector('#winModalCloseBtn').onclick = close;
   if (navigator.vibrate) navigator.vibrate([40, 60, 40, 60, 90]);
+
+  // Animation sequence: ring fills, then stats count up, then (if earned) confetti.
+  const ringFill = overlay.querySelector('#winRingFill');
+  const circumference = 2 * Math.PI * 34;
+  ringFill.style.strokeDasharray = `${circumference} ${circumference}`;
+  ringFill.style.strokeDashoffset = circumference;
+  requestAnimationFrame(() => {
+    ringFill.style.transition = 'stroke-dashoffset 900ms cubic-bezier(.2,.8,.3,1)';
+    ringFill.style.strokeDashoffset = circumference * (1 - score / 100);
+  });
+  setTimeout(() => {
+    const durEl = overlay.querySelector('#winDuration');
+    if (mins != null) animateCountUp(durEl, mins, { suffix: 'm' }); else durEl.textContent = '—';
+    animateCountUp(overlay.querySelector('#winExCount'), exCount);
+    animateCountUp(overlay.querySelector('#winSetCount'), setCount);
+    animateCountUp(overlay.querySelector('#winVolume'), totalVolume);
+    if (estCalories != null) animateCountUp(overlay.querySelector('#winCalories'), estCalories); else overlay.querySelector('#winCalories').textContent = '—';
+  }, 500);
+  if (prsBroken > 0 || isNewLongestStreak) {
+    setTimeout(() => spawnConfetti(overlay), 250);
+  }
 }
 
 // ---------- REST TIMER ----------
@@ -2063,6 +2451,187 @@ function getAllTimeBests(day) {
   }).filter(Boolean);
 }
 
+// ---------- TODAY-AT-A-GLANCE DASHBOARD ----------
+// A small, self-contained metric layer sitting on top of data the app
+// already has (state.history, getExState, getMuscleGroupDurationStats,
+// computeStreak) — it reads, never writes, so it can't drift out of sync
+// with the actual progression engine.
+
+// Median gap (in days) between sessions of a given day-label — used for the
+// "recovery status" read on the dashboard header.
+function getDayCadenceDays(dayLabel) {
+  const dates = getAllUniqueSessions().filter(s => s.dayLabel === dayLabel).map(s => new Date(s.dateKey).getTime()).sort((a,b)=>a-b);
+  const uniq = [...new Set(dates)];
+  if (uniq.length < 2) return 7 * DAYS.length; // no history yet — assume one full rotation
+  const gaps = [];
+  for (let i = 1; i < uniq.length; i++) gaps.push((uniq[i]-uniq[i-1]) / 86400000);
+  gaps.sort((a,b)=>a-b);
+  const mid = Math.floor(gaps.length/2);
+  return gaps.length % 2 ? gaps[mid] : (gaps[mid-1]+gaps[mid])/2;
+}
+
+function getRecoveryStatus(dayLabel) {
+  const sessions = getAllUniqueSessions().filter(s => s.dayLabel === dayLabel).sort((a,b) => a.dateKey.localeCompare(b.dateKey));
+  if (!sessions.length) return { label: 'No history yet', level: 'neutral' };
+  const last = sessions[sessions.length - 1];
+  const daysSince = Math.floor((Date.now() - new Date(last.dateKey).getTime()) / 86400000);
+  const cadence = getDayCadenceDays(dayLabel);
+  const ratio = cadence > 0 ? daysSince / cadence : 1;
+  if (ratio < 0.5) return { label: 'Still recovering', level: 'low' };
+  if (ratio <= 1.4) return { label: 'Recovered · ready', level: 'good' };
+  return { label: 'Well rested (or overdue)', level: 'neutral' };
+}
+
+// Average consistency across every exercise with enough history to measure —
+// a single "how on-pace am I overall" percentage for the header.
+function getOverallConsistencyPct() {
+  const allEx = DAYS.flatMap(d => d.exercises);
+  const measurable = allEx.filter(ex => state.history.filter(h => h.exercise === ex.name && !h.skipped).length >= 2);
+  if (!measurable.length) return null;
+  const avg = measurable.reduce((sum, ex) => sum + getExerciseConsistency(ex.name), 0) / measurable.length;
+  return Math.round(avg * 100);
+}
+
+// Composite 0-100 "how's this workout going" score. Weights: completion is
+// the biggest single driver (it's literally what "today" is about), then
+// consistency (the habit that actually compounds), then a streak and PR
+// bonus on top. Intentionally simple/transparent rather than a black box.
+function computeWorkoutScore({ completionPct, consistencyPct, streak, prsToday }) {
+  const completionScore = completionPct; // 0-100, weight 0.5
+  const consistencyScore = consistencyPct ?? 60; // neutral default when no data yet
+  const streakScore = Math.min(100, streak * 12); // saturates around a 8-week streak
+  let score = completionScore * 0.5 + consistencyScore * 0.3 + streakScore * 0.2;
+  score += Math.min(10, prsToday * 5); // small bonus, doesn't dominate
+  return Math.round(Math.min(100, score));
+}
+function scoreToGrade(score) {
+  if (score >= 97) return 'A+';
+  if (score >= 90) return 'A';
+  if (score >= 83) return 'B+';
+  if (score >= 75) return 'B';
+  if (score >= 65) return 'C+';
+  if (score >= 50) return 'C';
+  return 'D';
+}
+
+// current(number), baseline(number|null) -> { arrow, dir, pct, colorVar }.
+// invertGood=true for metrics where a *decrease* is the good direction
+// (e.g. workout duration getting shorter for the same work).
+function computeTrend(current, baseline, invertGood = false) {
+  if (baseline == null || baseline === 0 || current == null) return { arrow: '→', dir: 'flat', pct: null, colorVar: 'var(--text-faint)' };
+  const pct = Math.round(((current - baseline) / baseline) * 100);
+  if (Math.abs(pct) < 3) return { arrow: '→', dir: 'flat', pct, colorVar: 'var(--text-faint)' };
+  const dir = pct > 0 ? 'up' : 'down';
+  const isGood = invertGood ? dir === 'down' : dir === 'up';
+  return { arrow: dir === 'up' ? '▲' : '▼', dir, pct, colorVar: isGood ? 'var(--success)' : 'var(--danger)' };
+}
+
+function getTodayDashboardStats() {
+  const day = DAYS[currentDayIdx];
+  if (!day) return null;
+  const completionPct = getTodayCompletionPct(day);
+  const { anchorDate, sessionNum } = getActiveSession(day.label);
+  const todaysEntries = state.history.filter(h => getEntryDateKey(h) === anchorDate && h.day === day.label && getEntrySessionNum(h) === sessionNum);
+  const doneNames = new Set(todaysEntries.map(h => h.exercise));
+  const completedCount = doneNames.size;
+  const remainingCount = Math.max(0, day.exercises.length - completedCount);
+  const setsToday = todaysEntries.reduce((sum, h) => sum + (h.sets ? h.sets.length : 0), 0);
+  const volumeToday = Math.round(todaysEntries.reduce((sum, h) => sum + (h.weight && !h.skipped ? h.weight * h.sets.reduce((a,b)=>a+b,0) : 0), 0));
+  const durationSoFar = getSessionDuration(anchorDate, day.label, sessionNum);
+  const durStats = getMuscleGroupDurationStats(day.label);
+  const estFinishMins = durStats && completionPct > 0 && completionPct < 100
+    ? Math.max(0, Math.round(durStats.mean * (1 - completionPct / 100)))
+    : null;
+  const prsToday = (state.prs || []).filter(p => dateStr(p.date) === dateStr(new Date())).length;
+  const streak = computeStreak();
+  const consistencyPct = getOverallConsistencyPct();
+  const recovery = getRecoveryStatus(day.label);
+  const score = computeWorkoutScore({ completionPct, consistencyPct, streak, prsToday });
+
+  // 30-day average session volume for this day, for the trend chip.
+  const priorSessions = getAllUniqueSessions().filter(s => s.dayLabel === day.label && s.dateKey !== anchorDate);
+  const cutoff30 = Date.now() - 30 * 86400000;
+  const recentVols = priorSessions.filter(s => new Date(s.dateKey).getTime() >= cutoff30).map(s => {
+    const entries = state.history.filter(h => getEntryDateKey(h) === s.dateKey && h.day === day.label && getEntrySessionNum(h) === s.sessionNum);
+    return entries.reduce((sum, h) => sum + (h.weight && !h.skipped ? h.weight * h.sets.reduce((a,b)=>a+b,0) : 0), 0);
+  });
+  const avgVol30 = recentVols.length ? Math.round(recentVols.reduce((a,b)=>a+b,0) / recentVols.length) : null;
+  const volumeTrend = volumeToday > 0 ? computeTrend(volumeToday, avgVol30) : null;
+
+  const avgDur30 = durStats ? durStats.mean : null;
+  const durationTrend = durationSoFar != null ? computeTrend(durationSoFar, avgDur30, true) : null;
+
+  return {
+    day, completionPct, completedCount, remainingCount, setsToday, volumeToday,
+    durationSoFar, estFinishMins, prsToday, streak, consistencyPct, recovery,
+    score, grade: scoreToGrade(score), volumeTrend, durationTrend,
+  };
+}
+
+function generateIntelligentSummary(stats) {
+  if (!stats) return 'Log a few sessions to unlock trend insights.';
+  const { volumeTrend, durationTrend, consistencyPct, completionPct } = stats;
+  if (completionPct === 0) {
+    if (consistencyPct != null && consistencyPct >= 85) return `On pace — you're training consistently. Ready when you are.`;
+    return `Ready to start ${escapeHtml(stats.day.label)}.`;
+  }
+  if (volumeTrend && volumeTrend.dir === 'up' && volumeTrend.pct >= 8) {
+    return `Excellent progress. Volume is up ${volumeTrend.pct}% vs your recent average for this day.`;
+  }
+  if (volumeTrend && volumeTrend.dir === 'down' && volumeTrend.pct <= -8) {
+    return `Progress has slowed today — volume is down ${Math.abs(volumeTrend.pct)}% vs your recent average. Recovery or fatigue may be a factor.`;
+  }
+  if (durationTrend && durationTrend.dir === 'down' && durationTrend.colorVar === 'var(--success)') {
+    return `Efficient session — moving faster than your recent average pace for this day.`;
+  }
+  if (consistencyPct != null && consistencyPct < 60) {
+    return `Consistency has dropped to ${consistencyPct}% recently — that's the biggest lever on your long-term progress right now.`;
+  }
+  return `Solid, steady session. Keep the pace up.`;
+}
+
+function renderTodayHeader() {
+  const stats = getTodayDashboardStats();
+  if (!stats) return '';
+  const { day, completionPct, completedCount, remainingCount, setsToday, volumeToday, durationSoFar, estFinishMins, prsToday, streak, consistencyPct, recovery, score, grade, volumeTrend, durationTrend } = stats;
+
+  const trendChip = (t) => t ? `<span style="color:${t.colorVar}; font-weight:700;">${t.arrow}${t.pct != null ? ' ' + Math.abs(t.pct) + '%' : ''}</span>` : '';
+  const recoveryDot = recovery.level === 'good' ? 'var(--success)' : recovery.level === 'low' ? 'var(--danger)' : 'var(--text-faint)';
+
+  const metric = (label, val, trend) => `
+    <div class="dash-metric">
+      <div class="dash-metric-label">${label}</div>
+      <div class="dash-metric-val">${val} ${trend ? trendChip(trend) : ''}</div>
+    </div>`;
+
+  return `<div class="card dash-header">
+    <div class="dash-top-row">
+      <div>
+        <div class="dash-eyebrow">${day.icon} ${escapeHtml(day.label)} · Today</div>
+        <div class="dash-summary">${generateIntelligentSummary(stats)}</div>
+      </div>
+      <div class="dash-score" style="--score-pct:${score}%;">
+        <div class="dash-score-ring"><div class="dash-score-inner"><div class="dash-score-val">${score}</div><div class="dash-score-grade">${grade}</div></div></div>
+      </div>
+    </div>
+    <div class="dash-progress-track"><div class="dash-progress-fill" style="width:${completionPct}%; background:${day.color};"></div></div>
+    <div class="dash-metric-grid">
+      ${metric('Completion', completionPct + '%')}
+      ${metric('Exercises', `${completedCount}/${day.exercises.length}`)}
+      ${metric('Remaining', remainingCount)}
+      ${metric('Sets Done', setsToday)}
+      ${metric('Volume', volumeToday.toLocaleString() + ' lb', volumeTrend)}
+      ${metric('Duration', durationSoFar != null ? formatDuration(durationSoFar) : '—', durationTrend)}
+      ${metric('Est. Finish', estFinishMins != null ? `in ~${estFinishMins}m` : '—')}
+      ${metric('Streak', streak + 'w 🔥')}
+      ${metric('Consistency', consistencyPct != null ? consistencyPct + '%' : '—')}
+      ${metric('PRs Today', prsToday + (prsToday ? ' 🏆' : ''))}
+      ${metric('Recovery', `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:50%;background:${recoveryDot};display:inline-block;"></span>${recovery.label}</span>`)}
+      ${metric('Score', `${score}/100`)}
+    </div>
+  </div>`;
+}
+
 function renderProgress() {
   if (progressDayIdx >= DAYS.length) progressDayIdx = 0;
   const progDay = DAYS[progressDayIdx];
@@ -2132,6 +2701,7 @@ function renderProgress() {
   }).join('');
 
   return `<main>
+    ${renderTodayHeader()}
     <div class="card" id="pcard-overview">
       <h3>📊 Overview</h3>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px;">
@@ -2185,9 +2755,36 @@ function renderProgress() {
         })()}
         <canvas id="progressChart"></canvas>
         <div class="meta" id="predictionText" style="margin-top:8px;"></div>
+        <div id="projectionCardsWrap"></div>
+        ${renderPredictionSettingsPanel()}
       </div>
     </div>
   </main>`;
+}
+
+// Small, collapsible-feeling settings strip for the prediction feature —
+// deliberately lives right under the chart it controls rather than in the
+// global Settings page, since it's chart-scoped configuration.
+function renderPredictionSettingsPanel() {
+  const s = getPredictionSettings();
+  const modeBtn = (key, label) => `<div class="tab" style="${s.mode===key ? 'background:var(--accent);color:#fff;' : ''}" onclick="setPredictionSetting('mode','${key}')">${label}</div>`;
+  const toggleRow = (key, label) => `
+    <div class="pred-toggle-row">
+      <span>${label}</span>
+      <div class="pred-switch ${s[key] ? 'on' : ''}" onclick="setPredictionSetting('${key}', ${!s[key]})"><div class="pred-switch-knob"></div></div>
+    </div>`;
+  return `<div class="pred-settings">
+    <div class="pred-toggle-row" style="margin-bottom:4px;">
+      <span style="font-weight:700;">🔮 Predictions</span>
+      <div class="pred-switch ${s.enabled ? 'on' : ''}" onclick="setPredictionSetting('enabled', ${!s.enabled})"><div class="pred-switch-knob"></div></div>
+    </div>
+    ${s.enabled ? `
+      <div class="tabs" style="padding:8px 0 4px; background:transparent;">${modeBtn('conservative','Conservative')}${modeBtn('normal','Normal')}${modeBtn('aggressive','Aggressive')}</div>
+      ${toggleRow('showFutureLine', 'Show future line on chart')}
+      ${toggleRow('showMilestones', 'Show milestone cards')}
+      ${toggleRow('showConfidence', 'Show confidence %')}
+    ` : ''}
+  </div>`;
 }
 
 let chartRef = null;
@@ -2195,6 +2792,8 @@ function renderCharts() {
   const ex = getExerciseById(progressExerciseId);
   const predEl = document.getElementById('predictionText');
   const canvas = document.getElementById('progressChart');
+  const cardsWrap = document.getElementById('projectionCardsWrap');
+  if (cardsWrap) cardsWrap.innerHTML = '';
   if (!ex) {
     if (predEl) predEl.textContent = 'Add an exercise to this day to see progression.';
     if (chartRef) { chartRef.destroy(); chartRef = null; }
@@ -2209,6 +2808,7 @@ function renderCharts() {
   const supportsWeight = ex.mode === 'weighted' || ex.mode === 'weighted_bw';
   const isVolumeMode = chartMetric === 'volume' && supportsWeight;
   const isE1rmMode = chartMetric === 'e1rm' && supportsWeight;
+  const predSettings = getPredictionSettings();
 
   const rangeDays = chartRange === '30' ? 30 : chartRange === '90' ? 90 : null;
   let points = state.history.filter(h => ex.name === h.exercise && !h.skipped);
@@ -2232,51 +2832,43 @@ function renderCharts() {
       ? points.map(p => estimate1RM(p.weight || 0, Math.max(...p.sets)))
       : points.map(p => p.weight ?? Math.max(...p.sets));
 
-  // Simple linear regression on index vs value for trend/prediction
+  // Quick one-line trend note. Reuses the same prediction engine that
+  // drives the chart's future line and the projection cards below —
+  // no separate regression logic duplicated here.
   let predictionMsg = '';
+  const engineResult = (!isVolumeMode && predSettings.enabled) ? predictExercise(ex) : null;
   if (isVolumeMode) {
     if (data.length >= 3) {
-      const last = data[data.length - 1];
-      const first = data[0];
-      const pctChange = first > 0 ? Math.round(((last - first) / first) * 100) : 0;
+      const pctChange = data[0] > 0 ? Math.round(((data[data.length-1] - data[0]) / data[0]) * 100) : 0;
       predictionMsg = `Total volume per session is ${pctChange >= 0 ? 'up' : 'down'} ${Math.abs(pctChange)}% over this range.`;
     } else {
       predictionMsg = 'Log a few more sessions to see a volume trend.';
     }
-  } else if (data.length >= 3) {
-    const n = data.length;
-    const xs = data.map((_, i) => i);
-    const xMean = xs.reduce((a,b)=>a+b,0) / n;
-    const yMean = data.reduce((a,b)=>a+b,0) / n;
-    let num = 0, den = 0;
-    for (let i = 0; i < n; i++) { num += (xs[i]-xMean)*(data[i]-yMean); den += (xs[i]-xMean)**2; }
-    const slope = den !== 0 ? num/den : 0;
-    const intercept = yMean - slope * xMean;
-    const futureIndex = n + 9; // project ~10 sessions ahead
-    let predicted = Math.round(intercept + slope * futureIndex);
-
+  } else if (engineResult) {
+    const proj3 = engineResult.projections.find(x => x.months === 3);
     if (isE1rmMode) {
-      predictionMsg = slope > 0
-        ? `At current pace, ~${predicted} lb estimated 1RM projected in ~10 more sessions.`
+      predictionMsg = proj3.progressPct > 0
+        ? `At current pace, ~${proj3.predictedE1rm} lb estimated 1RM projected in ~3 months.`
         : `Trend is flat/declining — keep logging for a better estimate.`;
     } else if (ex.mode === 'weighted') {
-      const capped = Math.min(predicted, WEIGHTS[WEIGHTS.length-1]);
-      if (data[data.length-1] >= WEIGHTS[WEIGHTS.length-1]) {
-        predictionMsg = `Already at your equipment ceiling (${WEIGHTS[WEIGHTS.length-1]} lb) — further gains need higher reps/tempo, not heavier dumbbells.`;
-      } else if (slope <= 0) {
+      if (proj3.atCeiling) {
+        predictionMsg = `Already near your equipment ceiling (${WEIGHTS[WEIGHTS.length-1]} lb) — further gains need higher reps/tempo, not heavier dumbbells.`;
+      } else if (proj3.progressPct <= 0) {
         predictionMsg = `Trend is flat/declining — no clear projection yet. Keep logging for a better estimate.`;
       } else {
-        predictionMsg = `At current pace, ~${capped} lb projected in ~10 more sessions.`;
+        predictionMsg = `At current pace, ~${proj3.predictedWorkingWeight} lb projected in ~3 months.`;
       }
     } else if (ex.mode === 'weighted_bw') {
-      predictionMsg = slope > 0
-        ? `At current pace, ~+${Math.max(0,predicted)} lb belt weight projected in ~10 more sessions.`
+      predictionMsg = proj3.progressPct > 0
+        ? `At current pace, ~+${Math.max(0, proj3.predictedWorkingWeight - (proj3.currentWorkingWeight||0))} lb belt weight projected in ~3 months.`
         : `Trend is flat/declining — keep logging for a better estimate.`;
     } else if (ex.mode === 'timed') {
-      predictionMsg = slope > 0 ? `At current pace, ~${predicted}s hold projected in ~10 more sessions.` : `Trend is flat — keep logging.`;
+      predictionMsg = proj3.progressPct > 0 ? `At current pace, ~${proj3.predictedE1rm}s hold projected in ~3 months.` : `Trend is flat — keep logging.`;
     } else {
-      predictionMsg = slope > 0 ? `At current pace, ~${predicted} reps projected in ~10 more sessions.` : `Trend is flat — keep logging.`;
+      predictionMsg = proj3.progressPct > 0 ? `At current pace, ~${proj3.predictedE1rm} reps projected in ~3 months.` : `Trend is flat — keep logging.`;
     }
+  } else if (!predSettings.enabled) {
+    predictionMsg = 'Predictions are turned off.';
   } else {
     predictionMsg = 'Log a few more sessions to unlock a trend projection.';
   }
@@ -2291,15 +2883,106 @@ function renderCharts() {
   const cssVars = getComputedStyle(document.documentElement);
   const textColor = cssVars.getPropertyValue('--text').trim() || '#e8e8ec';
   const textDimColor = cssVars.getPropertyValue('--text-dim').trim() || '#9aa0ac';
+
+  const datasets = [{ label: chartLabel, data, borderColor: chartColor, backgroundColor: chartColor + '26', fill:true, tension:0.3, pointRadius: 3 }];
+  let futureMeta = []; // parallel metadata for the predicted dataset's tooltip
+
+  const showFuture = !isVolumeMode && engineResult && predSettings.enabled && predSettings.showFutureLine;
+  if (showFuture) {
+    const horizons = [1,2,3,4,5,6,8,10,12,15,18,21,24];
+    const finePred = predictExercise(ex, horizons);
+    const futureLabels = horizons.map(m => {
+      const d = new Date(); d.setMonth(d.getMonth() + m);
+      return d.toLocaleDateString();
+    });
+    const futureValues = finePred.projections.map(p => isE1rmMode ? p.predictedE1rm : (supportsWeight ? p.predictedWorkingWeight : p.predictedE1rm));
+    futureMeta = finePred.projections.map(p => ({ predictedE1rm: p.predictedE1rm, predictedWorkingWeight: p.predictedWorkingWeight, confidence: p.confidence }));
+
+    // Dim the "actual" dataset's fill a touch so the eye reads the predicted
+    // segment as clearly secondary, per "historical data always has higher
+    // visual priority" — solid color/full opacity for actual, translucent
+    // dashed for predicted.
+    const predictedSeriesData = new Array(labels.length - 1).fill(null).concat([data[data.length-1], ...futureValues]);
+    labels.push(...futureLabels);
+    datasets[0].data = data.concat(new Array(futureValues.length).fill(null));
+    datasets.push({
+      label: 'Predicted',
+      data: predictedSeriesData,
+      borderColor: chartColor + '99',
+      backgroundColor: 'transparent',
+      borderDash: [7, 5],
+      fill: false,
+      tension: 0.25,
+      pointRadius: (ctx) => ctx.dataIndex === labels.length - horizons.length ? 3 : 2,
+      pointStyle: 'rectRot',
+      pointBackgroundColor: chartColor + '99',
+    });
+
+    renderProjectionCards(cardsWrap, ex, finePred, predSettings);
+  } else if (cardsWrap) {
+    cardsWrap.innerHTML = '';
+  }
+
   chartRef = new Chart(canvas, {
     type: 'line',
-    data: { labels, datasets: [{ label: chartLabel, data, borderColor: chartColor, backgroundColor: chartColor + '26', fill:true, tension:0.3 }] },
+    data: { labels, datasets },
     options: {
-      plugins: { legend: { labels: { color: textColor } } },
+      plugins: {
+        legend: { display: datasets.length > 1, labels: { color: textColor } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              if (ctx.datasetIndex === 1) {
+                const idx = ctx.dataIndex - (labels.length - futureMeta.length);
+                const meta = futureMeta[idx];
+                if (!meta) return `Predicted: ${ctx.formattedValue}`;
+                const lines = [`Predicted: ${ctx.formattedValue}`, `Est. 1RM: ${meta.predictedE1rm} lb`];
+                if (predSettings.showConfidence) lines.push(`Confidence: ${meta.confidence}%`);
+                return lines;
+              }
+              return `${ctx.dataset.label}: ${ctx.formattedValue}`;
+            }
+          }
+        }
+      },
       scales: { x:{ ticks:{ color: textDimColor } }, y:{ ticks:{ color: textDimColor }, beginAtZero:false } }
     }
   });
 }
+
+// Renders the 3/6/12/24-month milestone cards under the chart, plus a short
+// list of data-grounded insights. Pure DOM write into the container the
+// Progress page template already reserved — kept out of the main template
+// string since it depends on the async-loaded Chart.js/prediction pass.
+function renderProjectionCards(wrap, ex, pred, settings) {
+  if (!wrap || !settings.showMilestones) { if (wrap) wrap.innerHTML = ''; return; }
+  const supportsWeight = ex.mode === 'weighted' || ex.mode === 'weighted_bw';
+  const targetHorizons = [3, 6, 12, 24];
+  const cards = targetHorizons.map(m => {
+    const p = pred.projections.find(x => x.months === m);
+    if (!p) return '';
+    const confColor = p.confidence >= 80 ? 'var(--success)' : p.confidence >= 55 ? '#ffcb4a' : 'var(--text-faint)';
+    const primaryVal = supportsWeight ? `${p.predictedWorkingWeight} ${pred.unit}` : `${p.predictedE1rm} ${pred.unit}`;
+    const deltaVal = supportsWeight && p.deltaWorkingWeight != null ? `(+${Math.max(0,p.deltaWorkingWeight)} ${pred.unit})` : `(${p.progressPct >= 0 ? '+' : ''}${p.progressPct}%)`;
+    return `<div class="proj-card">
+      <div class="proj-card-h">${m < 12 ? m + ' Months' : (m/12) + ' Year' + (m>12?'s':'')}</div>
+      <div class="proj-card-primary">${primaryVal}</div>
+      <div class="proj-card-delta">${deltaVal}</div>
+      ${supportsWeight ? `<div class="proj-card-sub">Est. 1RM: ${p.predictedE1rm} lb</div>` : ''}
+      <div class="proj-card-sub">Volume: ${p.progressPct >= 0 ? '+' : ''}${p.progressPct}%</div>
+      ${settings.showConfidence ? `<div class="proj-card-conf"><span class="proj-conf-dot" style="background:${confColor};"></span>${p.confidence}% confidence</div>` : ''}
+      ${p.atCeiling ? `<div class="proj-card-sub" style="color:var(--danger);">At equipment ceiling</div>` : ''}
+    </div>`;
+  }).join('');
+
+  const insights = generatePredictionInsights(ex);
+  const insightsHtml = insights.length ? `<div class="pred-insights">${insights.map(i => `<div class="pred-insight-row">💡 ${escapeHtml(i)}</div>`).join('')}</div>` : '';
+
+  wrap.innerHTML = `<div class="proj-cards-label">Future Progress Prediction <span style="font-weight:400;color:var(--text-faint);">(${settings.mode})</span></div>
+    <div class="proj-cards-row">${cards}</div>
+    ${insightsHtml}`;
+}
+
 
 let calendarOffset = 0;
 
