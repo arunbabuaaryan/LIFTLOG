@@ -712,7 +712,16 @@ function persistDays() {
 
 function getSetsMin(ex) { return ex.setsMin ?? ex.sets; }
 function getSetsMax(ex) { return ex.setsMax ?? (ex.sets + 2); }
-function getRepIncrement(ex) { return (ex.repLow ?? 0) >= 8 ? 2 : 1; }
+function getRepIncrement(ex) { return ex.repIncrement ?? ((ex.repLow ?? 0) >= 8 ? 2 : 1); }
+function getBeltIncrement(ex) { return ex.beltIncrement ?? BELT_INCREMENT; }
+
+// Double-progression dimension toggles ("what" progresses). Each defaults to
+// true (undefined behaves as enabled) so exercises created before this option
+// existed keep their exact old behavior with no migration needed — only an
+// explicit `false` opts a dimension out.
+function progressesReps(ex) { return ex.progressReps !== false; }
+function progressesSets(ex) { return ex.progressSets !== false; }
+function progressesWeight(ex) { return ex.progressWeight !== false; }
 
 // ---------- EXERCISE MODE REGISTRY (plugin architecture) ----------
 // This is the one place that knows how each *kind* of exercise behaves.
@@ -744,28 +753,32 @@ function getRepIncrement(ex) { return (ex.repLow ?? 0) >= 8 ? 2 : 1; }
 // (a heavier dumbbell vs. more belt weight) — keeping that shared behavior
 // impossible to accidentally let drift apart between the two.
 function progressRepsAndSets(ex, s, repInc) {
-  if (s.targetReps < ex.repHigh) {
+  if (progressesReps(ex) && s.targetReps < ex.repHigh) {
     s.targetReps = Math.min(s.targetReps + repInc, ex.repHigh);
     return { done: true, message: `Progress: +${repInc} rep(s) next time` };
   }
-  const setsMax = getSetsMax(ex);
-  if (s.sets < setsMax) {
-    s.sets++;
-    s.targetReps = ex.repLow;
-    return { done: true, message: `Added a set! Now ${s.sets} sets next time` };
+  if (progressesSets(ex)) {
+    const setsMax = getSetsMax(ex);
+    if (s.sets < setsMax) {
+      s.sets++;
+      if (progressesReps(ex)) s.targetReps = ex.repLow;
+      return { done: true, message: `Added a set! Now ${s.sets} sets next time` };
+    }
   }
   return { done: false };
 }
 function deloadRepsOrSets(ex, s, repInc) {
-  const setsMin = getSetsMin(ex);
-  if (s.targetReps > ex.repLow) {
+  if (progressesReps(ex) && s.targetReps > ex.repLow) {
     s.targetReps = Math.max(ex.repLow, s.targetReps - repInc);
     return { done: true, message: `Deload: -${repInc} rep(s)` };
   }
-  if (s.sets > setsMin) {
-    s.sets--;
-    s.targetReps = ex.repLow;
-    return { done: true, message: 'Deload: removed a set' };
+  if (progressesSets(ex)) {
+    const setsMin = getSetsMin(ex);
+    if (s.sets > setsMin) {
+      s.sets--;
+      if (progressesReps(ex)) s.targetReps = ex.repLow;
+      return { done: true, message: 'Deload: removed a set' };
+    }
   }
   return { done: false };
 }
@@ -789,11 +802,11 @@ const EXERCISE_MODES = {
       s.failStreak = 0;
       const repSet = progressRepsAndSets(ex, s, getRepIncrement(ex));
       if (repSet.done) return { message: repSet.message };
-      if (s.tier < WEIGHTS.length - 1) {
-        s.tier++; s.sets = getSetsMin(ex); s.targetReps = ex.repLow;
+      if (progressesWeight(ex) && s.tier < WEIGHTS.length - 1) {
+        s.tier++; s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow;
         return { message: `Weight up! Next: ${WEIGHTS[s.tier]} lb, back to ${getSetsMin(ex)} sets`, leveledUp: true };
       }
-      return { message: 'Maxed out dumbbells and sets — try slower tempo instead.' };
+      return { message: 'Maxed out your enabled progression — try slower tempo instead.' };
     },
     onFail: (ex, s) => {
       s.failStreak++;
@@ -802,7 +815,7 @@ const EXERCISE_MODES = {
       s.failStreak = 0;
       const deload = deloadRepsOrSets(ex, s, getRepIncrement(ex));
       if (deload.done) return { message: deload.message };
-      if (s.tier > 0) { s.tier--; s.sets = getSetsMin(ex); s.targetReps = ex.repLow; return { message: 'Deload: dropped a weight tier' }; }
+      if (progressesWeight(ex) && s.tier > 0) { s.tier--; s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow; return { message: 'Deload: dropped a weight tier' }; }
       return { message: '' };
     },
     sessionBestValue: (ex, s) => WEIGHTS[s.tier],
@@ -818,7 +831,7 @@ const EXERCISE_MODES = {
     hasWeightControl: true,
     weightLabel: (ex, s) => s.addedWeight > 0 ? `+${s.addedWeight} lb` : 'BW',
     adjustWeight: (ex, s, dir) => {
-      const newWeight = Math.max(0, s.addedWeight + dir * BELT_INCREMENT);
+      const newWeight = Math.max(0, s.addedWeight + dir * getBeltIncrement(ex));
       if (newWeight === s.addedWeight) return { ok: false, reason: 'Already at bodyweight (0 lb belt).' };
       s.addedWeight = newWeight;
       return { ok: true };
@@ -828,8 +841,11 @@ const EXERCISE_MODES = {
       s.failStreak = 0;
       const repSet = progressRepsAndSets(ex, s, getRepIncrement(ex));
       if (repSet.done) return { message: repSet.message };
-      s.addedWeight += BELT_INCREMENT; s.sets = getSetsMin(ex); s.targetReps = ex.repLow;
-      return { message: `Belt up! Add ${s.addedWeight} lb next time, back to ${getSetsMin(ex)} sets`, leveledUp: true };
+      if (progressesWeight(ex)) {
+        s.addedWeight += getBeltIncrement(ex); s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow;
+        return { message: `Belt up! Add ${s.addedWeight} lb next time, back to ${getSetsMin(ex)} sets`, leveledUp: true };
+      }
+      return { message: 'Maxed out your enabled progression — try slower tempo instead.' };
     },
     onFail: (ex, s) => {
       s.failStreak++;
@@ -838,7 +854,7 @@ const EXERCISE_MODES = {
       s.failStreak = 0;
       const deload = deloadRepsOrSets(ex, s, getRepIncrement(ex));
       if (deload.done) return { message: deload.message };
-      if (s.addedWeight > 0) { s.addedWeight = Math.max(0, s.addedWeight - BELT_INCREMENT); s.sets = getSetsMin(ex); s.targetReps = ex.repLow; return { message: 'Deload: removed belt weight' }; }
+      if (progressesWeight(ex) && s.addedWeight > 0) { s.addedWeight = Math.max(0, s.addedWeight - getBeltIncrement(ex)); s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow; return { message: 'Deload: removed belt weight' }; }
       return { message: '' };
     },
     sessionBestValue: (ex, s) => s.addedWeight,
@@ -1683,7 +1699,7 @@ function getExerciseById(exId) {
 // duplicated objects for rendering/ordering purposes. Rest times are
 // deliberately left per-day — resting longer between sets on a heavier day is
 // a legitimate difference, not drift.
-const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'failThreshold', 'notes'];
+const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'failThreshold', 'notes', 'progressReps', 'progressSets', 'progressWeight', 'repIncrement', 'beltIncrement'];
 
 function getLinkedCopies(exId) {
   const copies = [];
@@ -3258,7 +3274,14 @@ function openExerciseEditor(exId) {
       <label style="${lbl}">Rep range — low<input type="number" id="editExRepLow" value="${ex.repLow}"></label>
       <label style="${lbl}">Rep range — high<input type="number" id="editExRepHigh" value="${ex.repHigh}"></label>
     </div>
-    <div class="meta" style="margin:0;">Increment auto-set: 2 reps/session if low end is 8+, 1 rep/session if 7 or below</div>
+    <label style="${lbl}">Rep increment (blank = auto)<input type="number" id="editExRepIncrement" placeholder="auto" value="${ex.repIncrement ?? ''}"></label>
+    ${ex.mode === 'weighted_bw' ? `<label style="${lbl}">Belt increment (lb)<input type="number" id="editExBeltIncrement" value="${getBeltIncrement(ex)}"></label>` : ''}
+    <div>
+      <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
+      <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="editExProgressReps" ${progressesReps(ex) ? 'checked' : ''}> Reps</label>
+      <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="editExProgressSets" ${progressesSets(ex) ? 'checked' : ''}> Sets</label>
+      <label style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="editExProgressWeight" ${progressesWeight(ex) ? 'checked' : ''}> Weight</label>
+    </div>
   ` : ex.mode === 'bodyweight' ? `
     <label style="${lbl}">Number of sets<input type="number" id="editExSets" value="${ex.sets}"></label>
     <label style="${lbl}">Default starting reps<input type="number" id="editExStartReps" value="${ex.startReps}"></label>
@@ -3302,6 +3325,28 @@ function openExerciseEditor(exId) {
     }
 
     if (isWeighted) {
+      const progressReps = overlay.querySelector('#editExProgressReps').checked;
+      const progressSets = overlay.querySelector('#editExProgressSets').checked;
+      const progressWeight = overlay.querySelector('#editExProgressWeight').checked;
+      if (!progressReps && !progressSets && !progressWeight) {
+        alert('Pick at least one thing to progress (reps, sets, or weight). Nothing was saved.');
+        return;
+      }
+      ex.progressReps = progressReps;
+      ex.progressSets = progressSets;
+      ex.progressWeight = progressWeight;
+
+      const repIncEl = overlay.querySelector('#editExRepIncrement');
+      const repIncV = parseInt(repIncEl.value);
+      if (repIncEl.value.trim() === '') delete ex.repIncrement;
+      else if (!isNaN(repIncV) && repIncV >= 1) ex.repIncrement = repIncV;
+
+      const beltIncEl = overlay.querySelector('#editExBeltIncrement');
+      if (beltIncEl) {
+        const beltIncV = parseInt(beltIncEl.value);
+        if (!isNaN(beltIncV) && beltIncV >= 1) ex.beltIncrement = beltIncV;
+      }
+
       const newMin = parseInt(overlay.querySelector('#editExSetsMin').value);
       const newMaxRaw = parseInt(overlay.querySelector('#editExSetsMax').value);
       if (!isNaN(newMin) && newMin >= 1) {
@@ -3432,7 +3477,7 @@ function editExerciseProgress(exId) {
     if (reps !== null && !isNaN(parseInt(reps))) s.targetReps = Math.max(1, parseInt(reps));
     s.failStreak = 0;
   } else if (ex.mode === 'weighted_bw') {
-    const input = prompt(`Current belt weight: ${s.addedWeight} lb.\nEnter new belt weight (multiple of ${BELT_INCREMENT}):`, s.addedWeight);
+    const input = prompt(`Current belt weight: ${s.addedWeight} lb.\nEnter new belt weight (multiple of ${getBeltIncrement(ex)}):`, s.addedWeight);
     if (input === null) return;
     const n = parseInt(input);
     if (isNaN(n) || n < 0) { alert('Enter a valid non-negative number.'); return; }
@@ -3462,7 +3507,10 @@ function editExerciseProgress(exId) {
 
 function onManageModeChange() {
   const mode = document.getElementById('newExMode').value;
-  document.getElementById('grpRepRange').style.display = (mode === 'weighted' || mode === 'weighted_bw') ? 'block' : 'none';
+  const isWeighted = (mode === 'weighted' || mode === 'weighted_bw');
+  document.getElementById('grpRepRange').style.display = isWeighted ? 'block' : 'none';
+  document.getElementById('grpProgressOptions').style.display = isWeighted ? 'block' : 'none';
+  document.getElementById('grpBeltIncrement').style.display = (mode === 'weighted_bw') ? 'block' : 'none';
   document.getElementById('grpStartReps').style.display = (mode === 'bodyweight') ? 'block' : 'none';
   document.getElementById('grpStartSeconds').style.display = (mode === 'timed') ? 'block' : 'none';
 }
@@ -3546,6 +3594,25 @@ function addExercise(dayIdx) {
     ex.repHigh = parseInt(document.getElementById('newExRepHigh').value) || DEFAULT_REP_HIGH;
     ex.setsMin = sets;
     ex.setsMax = sets + 2; // default headroom; editable anytime via 🔧 Sets/Reps
+
+    const progressReps = document.getElementById('newExProgressReps').checked;
+    const progressSets = document.getElementById('newExProgressSets').checked;
+    const progressWeight = document.getElementById('newExProgressWeight').checked;
+    if (!progressReps && !progressSets && !progressWeight) {
+      alert('Pick at least one thing to progress (reps, sets, or weight).');
+      return;
+    }
+    ex.progressReps = progressReps;
+    ex.progressSets = progressSets;
+    ex.progressWeight = progressWeight;
+
+    const repIncRaw = parseInt(document.getElementById('newExRepIncrement').value);
+    if (!isNaN(repIncRaw) && repIncRaw >= 1) ex.repIncrement = repIncRaw;
+
+    if (mode === 'weighted_bw') {
+      const beltIncRaw = parseInt(document.getElementById('newExBeltIncrement').value);
+      ex.beltIncrement = (!isNaN(beltIncRaw) && beltIncRaw >= 1) ? beltIncRaw : BELT_INCREMENT;
+    }
   } else if (mode === 'bodyweight') {
     ex.startReps = parseInt(document.getElementById('newExStartReps').value) || 5;
   } else if (mode === 'timed') {
@@ -3628,7 +3695,14 @@ function renderManage() {
         <div id="grpRepRange">
           Rep range: <input id="newExRepLow" type="number" value="8" style="width:50px;"> to
           <input id="newExRepHigh" type="number" value="12" style="width:50px;">
-          <div class="meta" style="margin:4px 0 0;">Increment auto-set: 2 reps/session if low end is 8+, 1 rep/session if 7 or below</div>
+          <div style="margin-top:6px;">Rep increment (blank = auto): <input id="newExRepIncrement" type="number" placeholder="auto" style="width:60px;"></div>
+        </div>
+        <div id="grpBeltIncrement" style="display:none;">Belt increment (lb): <input id="newExBeltIncrement" type="number" value="${BELT_INCREMENT}" style="width:60px;"></div>
+        <div id="grpProgressOptions" style="display:none;">
+          <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
+          <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressReps" checked> Reps</label>
+          <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressSets" checked> Sets</label>
+          <label style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="newExProgressWeight" checked> Weight</label>
         </div>
         <div id="grpStartReps" style="display:none;">Starting reps: <input id="newExStartReps" type="number" value="5" style="width:50px;"></div>
         <div id="grpStartSeconds" style="display:none;">Starting seconds: <input id="newExStartSeconds" type="number" value="30" style="width:60px;"></div>
