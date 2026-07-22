@@ -863,18 +863,50 @@ const EXERCISE_MODES = {
     usesWeightAsBest: true,
   },
   bodyweight: {
-    initState: ex => ({ targetReps: ex.startReps, failStreak: 0 }),
+    initState: ex => ({ targetReps: ex.startReps, sets: getSetsMin(ex), failStreak: 0 }),
     getTargetValue: s => s.targetReps,
-    usesProgressiveSets: false,
-    label: (ex, s) => `Bodyweight x ${s.targetReps} reps`,
+    usesProgressiveSets: true,
+    label: (ex, s) => `Bodyweight x ${s.targetReps} reps x ${s.sets} sets`,
     hasWeightControl: false,
     successCheck: (s, arr) => arr.every(x => x.value >= s.targetReps),
-    onSuccess: (ex, s) => { s.failStreak = 0; s.targetReps++; return { message: 'Progress: +1 rep next time' }; },
+    onSuccess: (ex, s) => {
+      s.failStreak = 0;
+      // repHigh is optional for bodyweight — if unset, reps climb forever
+      // (the original behavior). Setting it turns on the same "reps, then
+      // add a set" ramp weighted exercises use.
+      const repHigh = ex.repHigh ?? Infinity;
+      if (progressesReps(ex) && s.targetReps < repHigh) {
+        const repInc = getRepIncrement(ex);
+        s.targetReps = isFinite(repHigh) ? Math.min(s.targetReps + repInc, repHigh) : s.targetReps + repInc;
+        return { message: `Progress: +${repInc} rep(s) next time` };
+      }
+      if (progressesSets(ex)) {
+        const setsMax = getSetsMax(ex);
+        if (s.sets < setsMax) {
+          s.sets++;
+          if (progressesReps(ex) && isFinite(repHigh)) s.targetReps = ex.startReps;
+          return { message: `Added a set! Now ${s.sets} sets next time` };
+        }
+      }
+      return { message: 'Maxed out your enabled progression — nice work!' };
+    },
     onFail: (ex, s) => {
       s.failStreak++;
       const threshold = getFailThreshold(ex);
-      if (s.failStreak >= threshold) { s.failStreak = 0; s.targetReps = Math.max(1, s.targetReps - 2); return { message: 'Deload: -2 reps' }; }
-      return { message: `Missed target (${s.failStreak}/${threshold} before deload)` };
+      if (s.failStreak < threshold) return { message: `Missed target (${s.failStreak}/${threshold} before deload)` };
+      s.failStreak = 0;
+      if (progressesReps(ex) && s.targetReps > 1) {
+        s.targetReps = Math.max(1, s.targetReps - 2);
+        return { message: 'Deload: -2 reps' };
+      }
+      if (progressesSets(ex)) {
+        const setsMin = getSetsMin(ex);
+        if (s.sets > setsMin) {
+          s.sets--;
+          return { message: 'Deload: removed a set' };
+        }
+      }
+      return { message: '' };
     },
     sessionBestValue: (ex, s, arr) => Math.max(...arr.map(x => x.value)),
     historyWeight: () => null,
@@ -3283,8 +3315,21 @@ function openExerciseEditor(exId) {
       <label style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="editExProgressWeight" ${progressesWeight(ex) ? 'checked' : ''}> Weight</label>
     </div>
   ` : ex.mode === 'bodyweight' ? `
-    <label style="${lbl}">Number of sets<input type="number" id="editExSets" value="${ex.sets}"></label>
-    <label style="${lbl}">Default starting reps<input type="number" id="editExStartReps" value="${ex.startReps}"></label>
+    <div class="row" style="gap:10px;">
+      <label style="${lbl}">Sets — min<input type="number" id="editExSetsMin" value="${getSetsMin(ex)}"></label>
+      <label style="${lbl}">Sets — max<input type="number" id="editExSetsMax" value="${getSetsMax(ex)}"></label>
+    </div>
+    <div class="row" style="gap:10px;">
+      <label style="${lbl}">Starting reps<input type="number" id="editExStartReps" value="${ex.startReps}"></label>
+      <label style="${lbl}">Rep ceiling (blank = uncapped)<input type="number" id="editExRepHigh" placeholder="uncapped" value="${ex.repHigh ?? ''}"></label>
+    </div>
+    <label style="${lbl}">Rep increment (blank = auto, +1/session)<input type="number" id="editExRepIncrement" placeholder="auto" value="${ex.repIncrement ?? ''}"></label>
+    <div class="meta" style="margin:0;">Leave rep ceiling blank to keep reps climbing forever (classic mode). Set it to have reps cap out and sets take over instead — set a Sets max above 1 for that to do anything.</div>
+    <div>
+      <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
+      <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="editExProgressReps" ${progressesReps(ex) ? 'checked' : ''}> Reps</label>
+      <label style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="editExProgressSets" ${progressesSets(ex) ? 'checked' : ''}> Sets</label>
+    </div>
   ` : `
     <label style="${lbl}">Default starting hold time (seconds)<input type="number" id="editExStartSeconds" value="${ex.startSeconds}"></label>
   `;
@@ -3362,10 +3407,41 @@ function openExerciseEditor(exId) {
       const s2 = getExState(ex);
       s2.targetReps = Math.min(Math.max(s2.targetReps, ex.repLow), ex.repHigh);
     } else if (ex.mode === 'bodyweight') {
-      const setsV = parseInt(overlay.querySelector('#editExSets').value);
+      const progressReps = overlay.querySelector('#editExProgressReps').checked;
+      const progressSets = overlay.querySelector('#editExProgressSets').checked;
+      if (!progressReps && !progressSets) {
+        alert('Pick at least one thing to progress (reps or sets). Nothing was saved.');
+        return;
+      }
+      ex.progressReps = progressReps;
+      ex.progressSets = progressSets;
+
+      const newMin = parseInt(overlay.querySelector('#editExSetsMin').value);
+      const newMaxRaw = parseInt(overlay.querySelector('#editExSetsMax').value);
+      if (!isNaN(newMin) && newMin >= 1) {
+        const newMax = Math.max(newMin, isNaN(newMaxRaw) ? newMin : newMaxRaw);
+        ex.setsMin = newMin; ex.setsMax = newMax; ex.sets = newMin;
+        const s = getExState(ex);
+        s.sets = Math.min(Math.max(s.sets, newMin), newMax);
+      }
+
       const repsV = parseInt(overlay.querySelector('#editExStartReps').value);
-      if (!isNaN(setsV) && setsV >= 1) ex.sets = setsV;
       if (!isNaN(repsV) && repsV >= 1) ex.startReps = repsV;
+
+      const repHighEl = overlay.querySelector('#editExRepHigh');
+      if (repHighEl.value.trim() === '') delete ex.repHigh;
+      else {
+        const repHighV = parseInt(repHighEl.value);
+        if (!isNaN(repHighV)) ex.repHigh = Math.max(ex.startReps, repHighV);
+      }
+
+      const repIncEl = overlay.querySelector('#editExRepIncrement');
+      const repIncV = parseInt(repIncEl.value);
+      if (repIncEl.value.trim() === '') delete ex.repIncrement;
+      else if (!isNaN(repIncV) && repIncV >= 1) ex.repIncrement = repIncV;
+
+      const s2 = getExState(ex);
+      if (ex.repHigh != null) s2.targetReps = Math.min(Math.max(s2.targetReps, ex.startReps), ex.repHigh);
     } else if (ex.mode === 'timed') {
       const secV = parseInt(overlay.querySelector('#editExStartSeconds').value);
       if (!isNaN(secV) && secV >= 1) ex.startSeconds = secV;
@@ -3508,10 +3584,12 @@ function editExerciseProgress(exId) {
 function onManageModeChange() {
   const mode = document.getElementById('newExMode').value;
   const isWeighted = (mode === 'weighted' || mode === 'weighted_bw');
+  const isBodyweight = (mode === 'bodyweight');
   document.getElementById('grpRepRange').style.display = isWeighted ? 'block' : 'none';
-  document.getElementById('grpProgressOptions').style.display = isWeighted ? 'block' : 'none';
+  document.getElementById('grpProgressOptions').style.display = (isWeighted || isBodyweight) ? 'block' : 'none';
+  document.getElementById('progressWeightWrap').style.display = isWeighted ? 'inline-flex' : 'none';
   document.getElementById('grpBeltIncrement').style.display = (mode === 'weighted_bw') ? 'block' : 'none';
-  document.getElementById('grpStartReps').style.display = (mode === 'bodyweight') ? 'block' : 'none';
+  document.getElementById('grpStartReps').style.display = isBodyweight ? 'block' : 'none';
   document.getElementById('grpStartSeconds').style.display = (mode === 'timed') ? 'block' : 'none';
 }
 
@@ -3615,6 +3693,23 @@ function addExercise(dayIdx) {
     }
   } else if (mode === 'bodyweight') {
     ex.startReps = parseInt(document.getElementById('newExStartReps').value) || 5;
+    ex.setsMin = sets;
+    ex.setsMax = sets + 2; // default headroom; editable anytime via ✏️ Edit
+
+    const progressReps = document.getElementById('newExProgressReps').checked;
+    const progressSets = document.getElementById('newExProgressSets').checked;
+    if (!progressReps && !progressSets) {
+      alert('Pick at least one thing to progress (reps or sets).');
+      return;
+    }
+    ex.progressReps = progressReps;
+    ex.progressSets = progressSets;
+
+    const repHighRaw = parseInt(document.getElementById('newExBwRepHigh').value);
+    if (!isNaN(repHighRaw) && repHighRaw >= ex.startReps) ex.repHigh = repHighRaw;
+
+    const repIncRaw = parseInt(document.getElementById('newExRepIncrementBw').value);
+    if (!isNaN(repIncRaw) && repIncRaw >= 1) ex.repIncrement = repIncRaw;
   } else if (mode === 'timed') {
     ex.startSeconds = parseInt(document.getElementById('newExStartSeconds').value) || 30;
   }
@@ -3702,9 +3797,14 @@ function renderManage() {
           <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
           <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressReps" checked> Reps</label>
           <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressSets" checked> Sets</label>
-          <label style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="newExProgressWeight" checked> Weight</label>
+          <label id="progressWeightWrap" style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="newExProgressWeight" checked> Weight</label>
         </div>
-        <div id="grpStartReps" style="display:none;">Starting reps: <input id="newExStartReps" type="number" value="5" style="width:50px;"></div>
+        <div id="grpStartReps" style="display:none;">
+          Starting reps: <input id="newExStartReps" type="number" value="5" style="width:50px;">
+          <div style="margin-top:6px;">Rep ceiling (blank = uncapped): <input id="newExBwRepHigh" type="number" placeholder="uncapped" style="width:70px;"></div>
+          <div style="margin-top:6px;">Rep increment (blank = auto, +1/session): <input id="newExRepIncrementBw" type="number" placeholder="auto" style="width:60px;"></div>
+          <div class="meta" style="margin:4px 0 0;">Leave rep ceiling blank to keep reps climbing forever. Set it so reps cap out and sets take over — increase "Sets" above for headroom.</div>
+        </div>
         <div id="grpStartSeconds" style="display:none;">Starting seconds: <input id="newExStartSeconds" type="number" value="30" style="width:60px;"></div>
         <button class="btn" onclick="addExercise(${currentDayIdx})">Add Exercise</button>
       </div>
