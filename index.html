@@ -294,6 +294,7 @@
   }
   .badge.up { background: var(--success-bg); color: var(--success); }
   .badge.deload { background: var(--danger-bg); color: var(--danger); }
+  .badge.linked { background: rgba(91,127,255,.15); color: var(--accent); }
   .histitem { padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
   .histitem:last-child { border-bottom: none; }
   #testModeBanner {
@@ -1670,6 +1671,54 @@ function getExerciseById(exId) {
   return null;
 }
 
+// ---------- LINKED EXERCISES (one exercise, multiple muscle-group days) ----------
+// A "linked" exercise is one that appears in more than one day's exercises[]
+// array *with the same id*. Progression state (state.exercises[id]) is keyed
+// purely by id, and history/PRs are keyed purely by exercise name — both
+// already live outside the per-day DAYS array — so a shared id automatically
+// gets shared progression across every day it's linked to, with zero changes
+// needed to the progression engine itself. The only thing this layer has to
+// actively maintain is keeping each day's *copy* of the exercise's config
+// (name, mode, rep/set range, notes, fail threshold) in sync, since those are
+// duplicated objects for rendering/ordering purposes. Rest times are
+// deliberately left per-day — resting longer between sets on a heavier day is
+// a legitimate difference, not drift.
+const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'failThreshold', 'notes'];
+
+function getLinkedCopies(exId) {
+  const copies = [];
+  DAYS.forEach((day, dayIdx) => {
+    const ex = day.exercises.find(e => e.id === exId);
+    if (ex) copies.push({ day, dayIdx, ex });
+  });
+  return copies;
+}
+
+function isExerciseLinked(exId) {
+  return getLinkedCopies(exId).length > 1;
+}
+
+// Human-readable "also trained on: Back, Legs" list, excluding the day passed in.
+function getLinkedDayLabel(exId, excludeDayIdx) {
+  const others = getLinkedCopies(exId).filter(c => c.dayIdx !== excludeDayIdx);
+  if (!others.length) return null;
+  return others.map(c => `${c.day.icon} ${c.day.label}`).join(', ');
+}
+
+// After editing one copy's config fields, push those same fields onto every
+// other day's copy of the same exercise so they never silently drift apart
+// (which would otherwise desync the shared progression state's valid ranges —
+// e.g. one day thinking reps cap at 12, another still capping at 10).
+function propagateLinkedExerciseConfig(sourceEx) {
+  getLinkedCopies(sourceEx.id).forEach(({ ex }) => {
+    if (ex === sourceEx) return;
+    LINKED_SYNC_FIELDS.forEach(f => {
+      if (sourceEx[f] === undefined) delete ex[f];
+      else ex[f] = sourceEx[f];
+    });
+  });
+}
+
 function startTimerFor(exId) {
   const ex = getExerciseById(exId);
   if (ex) startRestTimer(ex.rest);
@@ -2204,7 +2253,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
       : targetLabel(ex);
     return `<div class="card done-today card-locked" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
       <div class="row">
-        <h3>✅ ${escapeHtml(ex.name)}</h3>
+        <h3>✅ ${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>
         <button class="btn small secondary" onclick="unlockExerciseForRedo('${ex.id}')">↻ Redo</button>
       </div>
       <div class="meta" style="margin-bottom:0;">Logged: ${escapeHtml(loggedLabel)}</div>
@@ -2249,7 +2298,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
   return `<div class="card ${doneToday?'done-today':''} ${highlighted?'card-focus':''}" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
     ${highlighted ? `<div class="focus-eyebrow">Now training</div>` : ''}
     ${doneToday ? `<div class="focus-eyebrow" style="color:var(--danger);">Redo unlocked — this will add a second log entry</div>` : ''}
-    <div class="row"><h3>${doneToday?'✅ ':''}${escapeHtml(ex.name)}</h3>${badge}</div>
+    <div class="row"><h3>${doneToday?'✅ ':''}${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>${badge}</div>
     ${ex.notes ? `<div class="meta" style="font-style:italic;">📝 ${escapeHtml(ex.notes)}</div>` : ''}
     <div class="meta">Target: ${targetLabel(ex)}</div>
     <div class="row" style="margin-bottom:10px; gap:16px;">${weightControl}${setsControl}</div>
@@ -2739,6 +2788,10 @@ function renderProgress() {
         <h3 style="margin-bottom:10px;">${progDay.icon} ${progDay.label} — Progression</h3>
         <div class="tabs" id="progressExerciseTabs" style="padding:0 0 12px 0; background:transparent;">${exercisePills}</div>
         ${(() => {
+          const linkedLabel = progressExerciseId ? getLinkedDayLabel(progressExerciseId, progressDayIdx) : null;
+          return linkedLabel ? `<div class="meta" style="margin-top:-6px;">🔗 Also trained on ${linkedLabel} — progress below is shared across both.</div>` : '';
+        })()}
+        ${(() => {
           const selectedEx = getExerciseById(progressExerciseId);
           const supportsWeight = selectedEx && (selectedEx.mode === 'weighted' || selectedEx.mode === 'weighted_bw');
           const metricPills = supportsWeight ? `<div class="tabs" style="padding:0 0 8px 0; background:transparent;">
@@ -3101,6 +3154,7 @@ function renameExercise(exId) {
   // Cascade: update history and PR records so charts/PR lookups still match this exercise
   state.history.forEach(h => { if (h.exercise === oldName) h.exercise = cleanName; });
   if (state.prs) state.prs.forEach(p => { if (p.exercise === oldName) p.exercise = cleanName; });
+  propagateLinkedExerciseConfig(ex);
   persistDays();
   saveState();
   render();
@@ -3120,15 +3174,18 @@ function removeDay(dayIdx) {
   if (DAYS.length <= 1) { alert('You need at least one day.'); return; }
   showConfirm({
     title: 'Delete this day?',
-    message: `Delete the entire "${day.label}" day and ALL its exercises + history? This cannot be undone.`,
+    message: `Delete the entire "${day.label}" day and its exercises? History/progress is deleted too, except for any exercise also linked to another day — that one keeps its history there. This cannot be undone.`,
     confirmLabel: 'Delete',
     danger: true,
     onConfirm: () => {
-      const exNames = day.exercises.map(e => e.name);
-      const exIds = day.exercises.map(e => e.id);
-      state.history = state.history.filter(h => !exNames.includes(h.exercise));
-      if (state.prs) state.prs = state.prs.filter(p => !exNames.includes(p.exercise));
-      exIds.forEach(id => { if (state.exercises) delete state.exercises[id]; });
+      // Only wipe history/PRs/progression state for exercises that don't
+      // also live on another day — a linked exercise keeps progressing on
+      // whichever day(s) survive.
+      const exNamesToWipe = day.exercises.filter(e => !DAYS.some((d,i) => i !== dayIdx && d.exercises.some(o => o.id === e.id))).map(e => e.name);
+      const exIdsToWipe = day.exercises.filter(e => !DAYS.some((d,i) => i !== dayIdx && d.exercises.some(o => o.id === e.id))).map(e => e.id);
+      state.history = state.history.filter(h => !exNamesToWipe.includes(h.exercise));
+      if (state.prs) state.prs = state.prs.filter(p => !exNamesToWipe.includes(p.exercise));
+      exIdsToWipe.forEach(id => { if (state.exercises) delete state.exercises[id]; });
       DAYS.splice(dayIdx, 1);
       persistDays();
       saveState();
@@ -3155,6 +3212,21 @@ function removeExercise(dayIdx, exId) {
   const day = DAYS[dayIdx];
   const ex = day.exercises.find(e => e.id === exId);
   if (!ex) return;
+  const linkedElsewhere = DAYS.some((d, i) => i !== dayIdx && d.exercises.some(e => e.id === exId));
+  if (linkedElsewhere) {
+    const otherLabel = getLinkedDayLabel(exId, dayIdx);
+    showConfirm({
+      title: 'Remove from this day?',
+      message: `"${ex.name}" is also linked to ${otherLabel}. Removing it here only unlinks it from ${day.label} — its history and progress are kept and it'll keep progressing on ${otherLabel}.`,
+      confirmLabel: 'Remove from this day',
+      onConfirm: () => {
+        day.exercises = day.exercises.filter(e => e.id !== exId);
+        persistDays();
+        render();
+      }
+    });
+    return;
+  }
   showConfirm({
     title: 'Remove exercise?',
     message: `Remove "${ex.name}" and delete all its history? This cannot be undone.`,
@@ -3220,7 +3292,14 @@ function openExerciseEditor(exId) {
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
   overlay.querySelector('#editExSaveBtn').onclick = () => {
     const name = overlay.querySelector('#editExName').value.trim();
-    if (name) ex.name = name; // ignore if cleared blank, keep previous name
+    if (name && name !== ex.name) {
+      // Same cascade renameExercise() does — history/PRs are matched by name,
+      // so a rename that doesn't cascade would silently orphan past sessions.
+      const oldName = ex.name;
+      ex.name = name;
+      state.history.forEach(h => { if (h.exercise === oldName) h.exercise = name; });
+      if (state.prs) state.prs.forEach(p => { if (p.exercise === oldName) p.exercise = name; });
+    }
 
     if (isWeighted) {
       const newMin = parseInt(overlay.querySelector('#editExSetsMin').value);
@@ -3257,6 +3336,7 @@ function openExerciseEditor(exId) {
 
     ex.notes = overlay.querySelector('#editExNotes').value.trim();
 
+    propagateLinkedExerciseConfig(ex);
     delete liveSets[exId]; // force re-generation with any new set count/targets
     persistDays();
     saveState();
@@ -3307,6 +3387,7 @@ function editExerciseConfig(exId) {
   }
 
   delete liveSets[exId]; // force re-generation with new set count/targets next render
+  propagateLinkedExerciseConfig(ex);
   persistDays();
   saveState();
   alert(`Updated setup for "${ex.name}".`);
@@ -3386,6 +3467,70 @@ function onManageModeChange() {
   document.getElementById('grpStartSeconds').style.display = (mode === 'timed') ? 'block' : 'none';
 }
 
+// Clones an existing exercise's config into another day, sharing its id —
+// which is all that's needed for progression state (keyed by id) and
+// history/PRs (keyed by name) to automatically stay unified across both
+// days. Rest times start copied from the source but are independently
+// editable per day afterward.
+function linkExerciseToDay(sourceExId, targetDayIdx) {
+  const source = getExerciseById(sourceExId);
+  const targetDay = DAYS[targetDayIdx];
+  if (!source || !targetDay) return;
+  if (targetDay.exercises.some(e => e.id === sourceExId)) { alert(`"${source.name}" is already on ${targetDay.label}.`); return; }
+  const clone = JSON.parse(JSON.stringify(source));
+  targetDay.exercises.push(clone);
+  persistDays();
+  document.getElementById('linkExOverlay')?.remove();
+  render();
+  alert(`Linked "${source.name}" to ${targetDay.label} — it'll share progress with every day it's linked to.`);
+}
+
+// Picker overlay: every unique exercise (deduped by id) not already on this
+// day, with a name filter since a well-used app can easily have 25+ exercises
+// across its day rotation.
+function openLinkExercisePicker(dayIdx) {
+  const day = DAYS[dayIdx];
+  const seen = new Set();
+  const candidates = [];
+  DAYS.forEach(d => d.exercises.forEach(ex => {
+    if (seen.has(ex.id) || ex.id === undefined) return;
+    if (d.exercises === day.exercises) return; // will still be excluded below, but skip dup work
+    seen.add(ex.id);
+    candidates.push(ex);
+  }));
+  const available = candidates.filter(ex => !day.exercises.some(e => e.id === ex.id));
+
+  const rowHtml = (ex) => {
+    const onDays = getLinkedCopies(ex.id).map(c => `${c.day.icon} ${c.day.label}`).join(', ');
+    return `<div class="histitem row" data-exname="${escapeHtml(ex.name.toLowerCase())}">
+      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span><br><span style="font-size:11px; color:var(--text-faint);">on: ${onDays}</span></span>
+      <button class="btn small" onclick="linkExerciseToDay('${ex.id}', ${dayIdx})">+ Add</button>
+    </div>`;
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'linkExOverlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal" style="max-width:400px; max-height:85vh; overflow-y:auto;">
+      <h3>🔗 Link an exercise to ${escapeHtml(day.label)}</h3>
+      <div class="meta">Adds an exercise already used elsewhere so it shares the same progression (weight/reps/sets) and history across every day it's linked to — one shared exercise, trained from multiple muscle-group days.</div>
+      <input type="text" id="linkExFilter" placeholder="Search exercises..." style="width:100%; margin-bottom:10px; box-sizing:border-box;" oninput="filterLinkExerciseList()">
+      <div id="linkExList">${available.length ? available.map(rowHtml).join('') : `<div class="empty">No other exercises to link yet — add one to another day first.</div>`}</div>
+      <div class="row" style="margin-top:16px;">
+        <button class="btn secondary" style="width:100%;" onclick="document.getElementById('linkExOverlay').remove()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+function filterLinkExerciseList() {
+  const q = document.getElementById('linkExFilter').value.trim().toLowerCase();
+  document.querySelectorAll('#linkExList [data-exname]').forEach(row => {
+    row.style.display = row.dataset.exname.includes(q) ? '' : 'none';
+  });
+}
+
 function addExercise(dayIdx) {
   const name = document.getElementById('newExName').value.trim();
   const mode = document.getElementById('newExMode').value;
@@ -3422,7 +3567,7 @@ function renderManage() {
 
   const exList = day.exercises.map((ex, i) => `
     <div class="histitem row">
-      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span></span>
+      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span>${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗 linked</span>` : ''}</span>
       <span style="display:flex; gap:6px; flex-wrap:wrap;">
         <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
         <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, 1)" ${i===day.exercises.length-1?'disabled style="opacity:.35;"':''}>↓</button>
@@ -3466,6 +3611,7 @@ function renderManage() {
     <div class="card">
       <h3>Exercises — ${escapeHtml(day.label)}</h3>
       ${exList}
+      <button class="btn small secondary" style="margin-top:10px;" onclick="openLinkExercisePicker(${currentDayIdx})">🔗 Link Existing Exercise</button>
     </div>
     <div class="card">
       <h3>+ Add Exercise to ${escapeHtml(day.label)}</h3>
