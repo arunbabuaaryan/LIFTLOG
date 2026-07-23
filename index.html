@@ -4168,21 +4168,11 @@ function maybePromptBackup() {
   const last = state.meta.lastBackup ? new Date(state.meta.lastBackup) : null;
   const hoursSince = last ? (Date.now() - last) / 3600000 : Infinity;
   if (hoursSince >= 20) {
-    const ds = getDriveSyncState();
-    // Only sync automatically if a Drive token is already sitting in memory
-    // from something the person did explicitly earlier this session (opened
-    // Settings, tapped Connect/Sync). Never attempt to silently *acquire* one
-    // here. Google's "silent" token refresh (prompt:'') isn't reliably
-    // invisible in every browser/PWA context — it can still surface a real
-    // sign-in screen, which is exactly what was popping up mid-workout every
-    // time the token had expired since the last time the app was open.
-    if (ds.connected && driveAccessToken) {
-      driveSyncNow(true).then(() => render());
-      state.meta.lastBackup = new Date().toISOString();
-      saveState();
-    } else {
-      silentAutoBackup(); // no live Drive session right now — fall back to a local download so at least one backup exists
-    }
+    // Drive sync only ever runs from the explicit Sync button (manualDriveSyncNow).
+    // This periodic safety net always falls back to a local download, even if
+    // Drive is connected and a token happens to be warm from opening Settings —
+    // merely opening Settings should never itself trigger a Drive backup.
+    silentAutoBackup();
   }
 }
 
