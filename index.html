@@ -4259,7 +4259,11 @@ function renderHistory() {
   const durationsHtml = recentSessions.map(({dateKey, dayLabel, sessionNum}) => {
     const mins = getSessionDuration(dateKey, dayLabel, sessionNum);
     const label = sessionNum > 1 ? `${dayLabel} (session ${sessionNum})` : dayLabel;
-    return `<div class="histitem">${dateKey} · ${label}: ${mins != null ? mins+' min' : 'single log, no duration'}</div>`;
+    const editAttr = `openDurationEditModal('${dateKey}', '${escapeHtml(dayLabel).replace(/'/g, "\\'")}', ${sessionNum}, ${mins != null ? mins : 'null'})`;
+    return `<div class="histitem" style="cursor:pointer; display:flex; align-items:center; justify-content:space-between;" onclick="${editAttr}">
+      <span>${dateKey} · ${label}: ${mins != null ? mins+' min' : 'no duration — tap to set'}</span>
+      <span style="opacity:.55; font-size:11px;">✏️</span>
+    </div>`;
   }).join('');
   return `<main>${backupBar}
     ${renderCalendar()}
