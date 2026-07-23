@@ -629,6 +629,20 @@ function setFocusMode(on) {
   render();
 }
 
+// Whether finishing every exercise in a workout group should also trigger a
+// local backup download automatically (in addition to the manual Share/
+// Download/Sync buttons in Manage). Stored per-device, like theme/focus
+// mode, since it's a device behavior preference rather than portable
+// workout data. Defaults on.
+function getAutoBackupOnComplete() {
+  const v = localStorage.getItem('liftlog_auto_backup_complete');
+  return v === null ? true : v === '1';
+}
+function setAutoBackupOnComplete(on) {
+  localStorage.setItem('liftlog_auto_backup_complete', on ? '1' : '0');
+  render();
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(activeStoreKey());
@@ -716,6 +730,7 @@ function getSetsMin(ex) { return ex.setsMin ?? ex.sets; }
 function getSetsMax(ex) { return ex.setsMax ?? (ex.sets + 2); }
 function getRepIncrement(ex) { return ex.repIncrement ?? ((ex.repLow ?? 0) >= 8 ? 2 : 1); }
 function getBeltIncrement(ex) { return ex.beltIncrement ?? BELT_INCREMENT; }
+function getTimeIncrement(ex) { return ex.timeIncrement ?? 10; }
 
 // Double-progression dimension toggles ("what" progresses). Each defaults to
 // true (undefined behaves as enabled) so exercises created before this option
@@ -923,11 +938,11 @@ const EXERCISE_MODES = {
     hasWeightControl: false,
     successCheck: (s, arr) => arr.every(x => x.value >= s.targetSeconds),
     stepSize: 5, // +/- taps move 5 seconds at a time instead of 1
-    onSuccess: (ex, s) => { s.failStreak = 0; s.targetSeconds += 10; return { message: 'Progress: +10 sec next time' }; },
+    onSuccess: (ex, s) => { s.failStreak = 0; const inc = getTimeIncrement(ex); s.targetSeconds += inc; return { message: `Progress: +${inc} sec next time` }; },
     onFail: (ex, s) => {
       s.failStreak++;
       const threshold = getFailThreshold(ex);
-      if (s.failStreak >= threshold) { s.failStreak = 0; s.targetSeconds = Math.max(15, s.targetSeconds - 10); return { message: 'Deload: -10 sec' }; }
+      if (s.failStreak >= threshold) { s.failStreak = 0; const inc = getTimeIncrement(ex); s.targetSeconds = Math.max(15, s.targetSeconds - inc); return { message: `Deload: -${inc} sec` }; }
       return { message: `Missed target (${s.failStreak}/${threshold} before deload)` };
     },
     sessionBestValue: (ex, s, arr) => Math.max(...arr.map(x => x.value)),
@@ -1722,7 +1737,7 @@ function getExerciseById(exId) {
 // duplicated objects for rendering/ordering purposes. Rest times are
 // deliberately left per-day — resting longer between sets on a heavier day is
 // a legitimate difference, not drift.
-const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'failThreshold', 'notes', 'progressReps', 'progressSets', 'progressWeight', 'repIncrement', 'beltIncrement'];
+const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'failThreshold', 'notes', 'progressReps', 'progressSets', 'progressWeight', 'repIncrement', 'beltIncrement', 'timeIncrement'];
 
 function getLinkedCopies(exId) {
   const copies = [];
@@ -2015,12 +2030,16 @@ function finishExerciseConfirmed(ex) {
     startRestTimer(ex.transitionRest ?? TRANSITION_REST_SECONDS); // rest before moving to the next exercise
   } else {
     // Every exercise in this group is done — the workout is complete.
-    // Backups are manual-only (Share/Download/Sync now in Manage), so
-    // nothing is triggered automatically here.
+    // Trigger the automatic local backup (if enabled) right here, before
+    // anything async — that keeps the download inside the same
+    // user-gesture call stack as the tap that finished this exercise, so
+    // browsers treat it the same as tapping the manual Download button
+    // instead of blocking it as an unsolicited background download.
+    const backedUp = autoBackupOnWorkoutComplete();
     const { anchorDate, sessionNum } = getActiveSession(DAYS[currentDayIdx].label);
     const mins = getSessionDuration(anchorDate, DAYS[currentDayIdx].label, sessionNum);
     if (WORKOUT_FLOW.showCompletionModal) {
-      setTimeout(() => showWorkoutCompleteModal(DAYS[currentDayIdx], mins), WORKOUT_FLOW.autoAdvanceDelayMs);
+      setTimeout(() => showWorkoutCompleteModal(DAYS[currentDayIdx], mins, backedUp), WORKOUT_FLOW.autoAdvanceDelayMs);
     }
   }
   setTimeout(scrollToNextIncomplete, 100);
@@ -2085,7 +2104,7 @@ function spawnConfetti(container) {
 // helpers the Progress page uses (getOverallConsistencyPct, computeStreak,
 // computeWorkoutScore, predictExercise) — nothing here recomputes logic that
 // already exists elsewhere.
-function showWorkoutCompleteModal(day, mins) {
+function showWorkoutCompleteModal(day, mins, backedUp = false) {
   document.getElementById('winModalOverlay')?.remove();
   const exCount = day.exercises.length;
   const setCount = day.exercises.reduce((sum, ex) => {
@@ -2146,6 +2165,7 @@ function showWorkoutCompleteModal(day, mins) {
       </div>
       <div class="win-recovery">Recovery: <strong>${recovery.label}</strong></div>
       ${trend3mo ? `<div class="win-pred-update">🔮 Updated projection — ${escapeHtml(trendEx.name)}: ~${trend3mo.predictedWorkingWeight} lb in 3 months (${trend3mo.confidence}% confidence)</div>` : ''}
+      ${backedUp ? `<div class="meta" style="margin:8px 0 0; text-align:center;">📥 Backed up locally</div>` : ''}
       <button class="btn" style="width:100%; margin-top:14px;" id="winModalCloseBtn">Nice!</button>
     </div>`;
   document.body.appendChild(overlay);
@@ -3382,6 +3402,7 @@ function openExerciseEditor(exId) {
     </div>
   ` : `
     <label style="${lbl}">Default starting hold time (seconds)<input type="number" id="editExStartSeconds" value="${ex.startSeconds}"></label>
+    <label style="${lbl}">Time increment per progression/deload (sec)<input type="number" id="editExTimeIncrement" min="1" value="${getTimeIncrement(ex)}"></label>
   `;
 
   const overlay = document.createElement('div');
@@ -3495,6 +3516,8 @@ function openExerciseEditor(exId) {
     } else if (ex.mode === 'timed') {
       const secV = parseInt(overlay.querySelector('#editExStartSeconds').value);
       if (!isNaN(secV) && secV >= 1) ex.startSeconds = secV;
+      const timeIncV = parseInt(overlay.querySelector('#editExTimeIncrement').value);
+      if (!isNaN(timeIncV) && timeIncV >= 1) ex.timeIncrement = timeIncV;
     }
 
     const restBetweenV = parseInt(overlay.querySelector('#editExRestBetween').value);
@@ -3762,6 +3785,8 @@ function addExercise(dayIdx) {
     if (!isNaN(repIncRaw) && repIncRaw >= 1) ex.repIncrement = repIncRaw;
   } else if (mode === 'timed') {
     ex.startSeconds = parseInt(document.getElementById('newExStartSeconds').value) || 30;
+    const timeIncRaw = parseInt(document.getElementById('newExTimeIncrement').value);
+    ex.timeIncrement = (!isNaN(timeIncRaw) && timeIncRaw >= 1) ? timeIncRaw : 10;
   }
 
   DAYS[dayIdx].exercises.push(ex);
@@ -3855,7 +3880,10 @@ function renderManage() {
           <div style="margin-top:6px;">Rep increment (blank = auto, +1/session): <input id="newExRepIncrementBw" type="number" placeholder="auto" style="width:60px;"></div>
           <div class="meta" style="margin:4px 0 0;">Leave rep ceiling blank to keep reps climbing forever. Set it so reps cap out and sets take over — increase "Sets" above for headroom.</div>
         </div>
-        <div id="grpStartSeconds" style="display:none;">Starting seconds: <input id="newExStartSeconds" type="number" value="30" style="width:60px;"></div>
+        <div id="grpStartSeconds" style="display:none;">
+          Starting seconds: <input id="newExStartSeconds" type="number" value="30" style="width:60px;">
+          <div style="margin-top:6px;">Time increment per progression/deload (sec): <input id="newExTimeIncrement" type="number" value="10" min="1" style="width:60px;"></div>
+        </div>
         <button class="btn" onclick="addExercise(${currentDayIdx})">Add Exercise</button>
       </div>
     </div>
@@ -4088,10 +4116,16 @@ async function restoreFromDriveNow() {
 
 function renderHistory() {
   const ds = getDriveSyncState();
+  const driveDaysSince = daysSinceLastDriveSync();
+  const driveAgeLabel = driveDaysSince === null ? 'No Drive backup yet'
+    : driveDaysSince === 0 ? 'Drive backup: today'
+    : driveDaysSince === 1 ? 'Drive backup: 1 day ago'
+    : `Drive backup: ${driveDaysSince} days ago`;
   const driveSection = ds.connected
     ? `<div class="row" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
          <span class="meta" style="margin:0;">☁️ Synced as ${ds.email || 'connected account'}${ds.lastSync ? ' · last: '+new Date(ds.lastSync).toLocaleString() : ''}</span>
        </div>
+       <div class="meta" style="margin:4px 0 0; font-weight:700; color:${driveDaysSince !== null && driveDaysSince >= 7 ? 'var(--danger)' : 'var(--text-dim)'};">🕐 ${driveAgeLabel}</div>
        <div class="row" style="margin-top:8px;">
          <button class="btn small secondary" onclick="manualDriveSyncNow()">🔄 Sync now</button>
          <button class="btn small secondary" onclick="restoreFromDriveNow()">⬇️ Restore from Drive</button>
@@ -4117,7 +4151,11 @@ function renderHistory() {
       <button class="btn small secondary" onclick="editBackupFolder()">📁 Folder</button>
     </div>
     <div class="meta" style="margin:8px 0 0; font-weight:700; color:${daysSince !== null && daysSince >= 7 ? 'var(--danger)' : 'var(--text-dim)'};">🕐 ${backupAgeLabel}</div>
-    <div class="meta" style="margin:2px 0 0;">Backups only happen when you tap Share, Download, or Sync now above — nothing runs automatically in the background.</div>
+    <label class="row" style="margin-top:8px; align-items:center; gap:8px; cursor:pointer;">
+      <input type="checkbox" ${getAutoBackupOnComplete() ? 'checked' : ''} onchange="setAutoBackupOnComplete(this.checked)">
+      <span class="meta" style="margin:0;">Auto-backup (download) after finishing a full workout</span>
+    </label>
+    <div class="meta" style="margin:2px 0 0;">${getAutoBackupOnComplete() ? 'A local backup file downloads automatically each time you finish every exercise in a workout group.' : 'Auto-backup is off — backups only happen when you tap Share, Download, or Sync now above.'}</div>
     ${driveSection}
   </div>`;
   if (state.history.length === 0) return `<main>${backupBar}${renderCalendar()}<div class="empty">No workouts logged yet.</div></main>`;
@@ -4206,8 +4244,8 @@ async function shareBackup() {
 // Returns whole days since the most recent backup (local export/share OR
 // Drive sync, whichever is more recent), or null if no backup has ever
 // been made. Used to show the "Last backup: N days ago" indicator in
-// Manage — since backups are manual-only, this is what tells the person
-// it's time to tap one of the backup buttons.
+// Manage — this is what tells the person it's time to tap one of the
+// backup buttons (or, now, that the auto-backup-on-completion toggle is off).
 function daysSinceLastBackup() {
   state.meta = state.meta || {};
   const ds = getDriveSyncState();
@@ -4215,6 +4253,32 @@ function daysSinceLastBackup() {
   if (candidates.length === 0) return null;
   const mostRecent = Math.max(...candidates);
   return Math.floor((Date.now() - mostRecent) / 86400000);
+}
+
+// Returns whole days since the most recent Google Drive sync specifically
+// (not local backups), or null if this device has never synced to Drive.
+// Shown next to the Drive section so "days since Drive backup" is visible
+// on its own, separate from the combined local-or-Drive figure above.
+function daysSinceLastDriveSync() {
+  const ds = getDriveSyncState();
+  if (!ds.lastSync) return null;
+  return Math.floor((Date.now() - new Date(ds.lastSync).getTime()) / 86400000);
+}
+
+// Fires automatically the moment every exercise in a workout group is
+// finished (see finishExerciseConfirmed), unless the user has turned the
+// toggle off in Manage. Deliberately reuses exportBackup() itself — the
+// exact same file-writing path as the manual Download button — so there's
+// only one place that ever writes a backup file, and auto/manual backups
+// are provably identical in format.
+function autoBackupOnWorkoutComplete() {
+  if (!getAutoBackupOnComplete()) return false;
+  try {
+    exportBackup();
+    return true;
+  } catch (e) {
+    return false; // fail silently — the manual backup buttons are still there as a fallback
+  }
 }
 
 function importBackup(event) {

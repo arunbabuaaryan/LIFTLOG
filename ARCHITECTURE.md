@@ -127,3 +127,37 @@ someone's weight/rep progression). It was verified by:
 If you change `EXERCISE_MODES` or `MIGRATIONS` in the future, re-running
 something like this before shipping is strongly recommended — the cost of
 a silent bug here is a corrupted workout log, not just a UI glitch.
+
+## Later additions (post-refactor)
+
+**Auto-backup on workout completion.** `finishExerciseConfirmed()` now
+calls `autoBackupOnWorkoutComplete()` the moment the last exercise in a
+day's group is logged. That function is a thin, opt-out wrapper around
+`exportBackup()` — it doesn't reimplement file-writing, it just calls the
+same function the manual Download button calls, so auto- and manual
+backups are provably identical in format. The call happens synchronously,
+before the completion modal's `setTimeout`, so the download stays inside
+the same user-gesture call stack as the tap that finished the exercise
+(needed for browsers not to treat it as an unsolicited background
+download). The on/off toggle (`getAutoBackupOnComplete` /
+`setAutoBackupOnComplete`) is stored in `localStorage`, per-device, same
+pattern as `getFocusMode`/theme — it's a device behavior preference, not
+portable workout data, so it deliberately isn't in `state`.
+
+**Drive-specific "days since" indicator.** `daysSinceLastBackup()` (local-
+or-Drive, whichever is more recent) already existed for the local backup
+card. `daysSinceLastDriveSync()` is a narrower sibling that looks at
+`getDriveSyncState().lastSync` only, so the Drive section in Manage can
+show its own "days since" independent of whether a local backup happened
+more recently.
+
+**Per-exercise time increment.** The `timed` mode's progression step (how
+many seconds a hold target grows on success / shrinks on deload) was a
+hardcoded `10`. It's now `ex.timeIncrement`, read through
+`getTimeIncrement(ex)` with a `?? 10` fallback — the same optional-field-
+with-getter-default pattern `repIncrement` and `beltIncrement` already
+use. No migration was needed for this: old saved exercises simply fall
+through to the default via the getter, exactly like those two fields did.
+Editable in both the exercise editor and the "Add Exercise" form, and
+included in `LINKED_SYNC_FIELDS` so linked copies of an exercise stay in
+sync on it.
