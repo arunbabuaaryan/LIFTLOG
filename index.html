@@ -2189,8 +2189,17 @@ function showWorkoutCompleteModal(day, mins) {
 
 // ---------- REST TIMER ----------
 let restRemaining = 0;
+// A "hold" timer is the same countdown/FAB machinery, repurposed to time a
+// single timed-hold set (e.g. plank) rather than the rest between sets.
+// timerKind distinguishes which one is currently running so the FAB shows
+// the right label and, on completion, a hold timer marks its specific set
+// done instead of just going silent like a rest timer does.
+let timerKind = 'rest';
+let holdExId = null, holdSetIdx = null;
 function startRestTimer(seconds) {
   clearInterval(timerInterval);
+  timerKind = 'rest';
+  holdExId = null; holdSetIdx = null;
   restRemaining = seconds;
   const fab = document.getElementById('timerFab');
   fab.style.display = 'flex';
@@ -2212,13 +2221,60 @@ function startRestTimer(seconds) {
     }
   }, 1000);
 }
+
+// Starts a countdown for one specific timed-hold set, defaulting to that
+// set's current value — which is seeded from progression (getTargetValue)
+// and can be nudged with the +/- steppers same as any other set. When it
+// hits zero the set is auto-marked done, which flows straight into the
+// normal rest-timer-before-next-set logic in markSetDone.
+function startHoldTimer(exId, setIdx) {
+  const arr = liveSets[exId];
+  if (!arr || !arr[setIdx] || arr[setIdx].doneMark) return;
+  const seconds = arr[setIdx].value;
+  if (!seconds || seconds <= 0) return;
+  clearInterval(timerInterval);
+  timerKind = 'hold';
+  holdExId = exId; holdSetIdx = setIdx;
+  restRemaining = seconds;
+  const fab = document.getElementById('timerFab');
+  fab.style.display = 'flex';
+  fab.classList.remove('urgent');
+  updateFab();
+  if (navigator.vibrate) navigator.vibrate(20);
+  render();
+  timerInterval = setInterval(() => {
+    restRemaining--;
+    if (restRemaining <= 0) {
+      clearInterval(timerInterval);
+      fab.style.display = 'none';
+      fab.classList.remove('urgent');
+      finalAlarm();
+      completeHoldSet(exId, setIdx);
+    } else {
+      updateFab();
+      if (restRemaining <= 5) {
+        fab.classList.add('urgent');
+        countdownTick();
+      }
+    }
+  }, 1000);
+}
+function completeHoldSet(exId, setIdx) {
+  timerKind = 'rest';
+  holdExId = null; holdSetIdx = null;
+  const arr = liveSets[exId];
+  if (!arr || !arr[setIdx] || arr[setIdx].doneMark) return;
+  markSetDone(exId, setIdx); // marks done + triggers the normal rest timer / finish flow
+}
 function updateFab() {
   const fab = document.getElementById('timerFab');
   const m = Math.floor(restRemaining/60), s = restRemaining%60;
-  fab.innerHTML = `<span class="fablabel">REST</span>${m}:${s.toString().padStart(2,'0')}`;
+  fab.innerHTML = `<span class="fablabel">${timerKind === 'hold' ? 'HOLD' : 'REST'}</span>${m}:${s.toString().padStart(2,'0')}`;
 }
 function skipTimer() {
   clearInterval(timerInterval);
+  timerKind = 'rest';
+  holdExId = null; holdSetIdx = null;
   const fab = document.getElementById('timerFab');
   fab.style.display = 'none';
   fab.classList.remove('urgent');
@@ -2313,6 +2369,10 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
   const step = getExerciseMode(ex).stepSize ?? 1;
   const setsHtml = arr.map((set, i) => {
     const isChanged = recentlyChangedSet && recentlyChangedSet.exId === ex.id && recentlyChangedSet.setIdx === i;
+    const isHolding = timerKind === 'hold' && holdExId === ex.id && holdSetIdx === i;
+    const holdBtn = ex.mode === 'timed' && !set.doneMark
+      ? `<button class="stepbtn" onclick="startHoldTimer('${ex.id}', ${i})" title="Start ${set.value}s hold timer">${isHolding ? '⏱' : '▶'}</button>`
+      : '';
     return `<div class="setbox ${set.doneMark?'done':''} ${isChanged?'changed':''}">
       <button class="stepbtn"
         onpointerdown="startHoldZero('${ex.id}', ${i})"
@@ -2321,6 +2381,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
         onpointercancel="cancelHoldZero()">−</button>
       <span class="setval" onclick="typeSet('${ex.id}', ${i})">${set.value}</span>
       <button class="stepbtn" onclick="adjustSet('${ex.id}', ${i}, ${step})">+</button>
+      ${holdBtn}
       <button class="donebtn" onclick="markSetDone('${ex.id}', ${i})">${set.doneMark?'✓':'Done'}</button>
     </div>`;
   }).join('');
