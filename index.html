@@ -258,6 +258,8 @@
   }
   .donebtn:active { transform: scale(.93); }
   .setbox.done .donebtn { background: var(--success); color: #06120c; }
+  .holdbtn { background: var(--accent); color: #fff; }
+  .holdbtn:active { background: var(--accent); }
   input, select {
     padding: 10px; border-radius: 8px; background: var(--surface-raised);
     border: 1px solid var(--border-strong); color: var(--text); font-size: 14px; font-family: inherit;
@@ -1577,22 +1579,11 @@ function setView(v) {
   view = v;
   document.querySelectorAll('.navbtn').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   if (v === 'workout') requestWakeLock(); else releaseWakeLock();
-  if (v === 'manage') warmDriveTokenIfNeeded();
+  // Note: opening Manage/Settings deliberately does NOT touch Google Drive
+  // in any way (no silent token refresh, no sync). Drive sync only ever
+  // runs from the explicit "Sync now" button (manualDriveSyncNow), so
+  // navigating here can never itself trigger a backup.
   render();
-}
-
-// Best-effort, fire-and-forget attempt to silently refresh the Drive token
-// when Settings is opened — never automatically during a workout. If
-// Google's "silent" refresh (prompt:'') needs to fall back to a visible
-// sign-in screen, this is a reasonable place for that: the person just
-// deliberately navigated to Drive-related settings. Having a warm token
-// here is also what makes the end-of-workout sync actually able to fire
-// without needing to touch Google at that moment.
-function warmDriveTokenIfNeeded() {
-  const ds = getDriveSyncState();
-  if (ds.connected && !driveAccessToken) {
-    silentDriveAuth().then(() => render());
-  }
 }
 
 // ---------- MISTAKE-PROOFING ----------
@@ -2023,11 +2014,9 @@ function finishExerciseConfirmed(ex) {
   if (dayHasMoreToday) {
     startRestTimer(ex.transitionRest ?? TRANSITION_REST_SECONDS); // rest before moving to the next exercise
   } else {
-    // Every exercise in this group is done — the workout is complete. This is
-    // the one point per workout where a backup gets attempted, rather than
-    // after every single exercise — less noisy, and it means any (safe,
-    // non-interruptive) Drive sync happens once you've actually wrapped up.
-    maybePromptBackup();
+    // Every exercise in this group is done — the workout is complete.
+    // Backups are manual-only (Share/Download/Sync now in Manage), so
+    // nothing is triggered automatically here.
     const { anchorDate, sessionNum } = getActiveSession(DAYS[currentDayIdx].label);
     const mins = getSessionDuration(anchorDate, DAYS[currentDayIdx].label, sessionNum);
     if (WORKOUT_FLOW.showCompletionModal) {
@@ -2371,7 +2360,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
     const isChanged = recentlyChangedSet && recentlyChangedSet.exId === ex.id && recentlyChangedSet.setIdx === i;
     const isHolding = timerKind === 'hold' && holdExId === ex.id && holdSetIdx === i;
     const holdBtn = ex.mode === 'timed' && !set.doneMark
-      ? `<button class="stepbtn" onclick="startHoldTimer('${ex.id}', ${i})" title="Start ${set.value}s hold timer">${isHolding ? '⏱' : '▶'}</button>`
+      ? `<button class="stepbtn holdbtn" onclick="startHoldTimer('${ex.id}', ${i})" title="Start ${set.value}s hold timer">${isHolding ? '⏱' : '▶'}</button>`
       : '';
     return `<div class="setbox ${set.doneMark?'done':''} ${isChanged?'changed':''}">
       <button class="stepbtn"
@@ -2381,8 +2370,8 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
         onpointercancel="cancelHoldZero()">−</button>
       <span class="setval" onclick="typeSet('${ex.id}', ${i})">${set.value}</span>
       <button class="stepbtn" onclick="adjustSet('${ex.id}', ${i}, ${step})">+</button>
-      ${holdBtn}
       <button class="donebtn" onclick="markSetDone('${ex.id}', ${i})">${set.doneMark?'✓':'Done'}</button>
+      ${holdBtn}
     </div>`;
   }).join('');
 
@@ -4112,6 +4101,12 @@ function renderHistory() {
          <button class="btn small" onclick="connectGoogleDrive()">☁️ Connect Google Drive</button>
        </div>`;
 
+  const daysSince = daysSinceLastBackup();
+  const backupAgeLabel = daysSince === null ? 'No backup yet'
+    : daysSince === 0 ? 'Last backup: today'
+    : daysSince === 1 ? 'Last backup: 1 day ago'
+    : `Last backup: ${daysSince} days ago`;
+
   const backupBar = `<div class="card">
     <div class="row">
       <button class="btn small secondary" onclick="shareBackup()">📤 Share file</button>
@@ -4121,7 +4116,8 @@ function renderHistory() {
       </label>
       <button class="btn small secondary" onclick="editBackupFolder()">📁 Folder</button>
     </div>
-    <div class="meta" style="margin:8px 0 0;">${getDriveSyncState().connected ? 'Auto-backup: syncing to Google Drive (one file, no clutter).' : `Auto-backups save to: Downloads/${getBackupFolderName()}/`}</div>
+    <div class="meta" style="margin:8px 0 0; font-weight:700; color:${daysSince !== null && daysSince >= 7 ? 'var(--danger)' : 'var(--text-dim)'};">🕐 ${backupAgeLabel}</div>
+    <div class="meta" style="margin:2px 0 0;">Backups only happen when you tap Share, Download, or Sync now above — nothing runs automatically in the background.</div>
     ${driveSection}
   </div>`;
   if (state.history.length === 0) return `<main>${backupBar}${renderCalendar()}<div class="empty">No workouts logged yet.</div></main>`;
@@ -4207,34 +4203,18 @@ async function shareBackup() {
   exportBackup();
 }
 
-function silentAutoBackup() {
-  try {
-    const file = makeBackupFile();
-    const url = URL.createObjectURL(file);
-    const a = document.createElement('a');
-    a.href = url; a.download = file.name;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    state.meta = state.meta || {};
-    state.meta.lastBackup = new Date().toISOString();
-    saveState();
-  } catch (e) { /* fail silently, don't interrupt the workout */ }
-}
-
-function maybePromptBackup() {
+// Returns whole days since the most recent backup (local export/share OR
+// Drive sync, whichever is more recent), or null if no backup has ever
+// been made. Used to show the "Last backup: N days ago" indicator in
+// Manage — since backups are manual-only, this is what tells the person
+// it's time to tap one of the backup buttons.
+function daysSinceLastBackup() {
   state.meta = state.meta || {};
-  const last = state.meta.lastBackup ? new Date(state.meta.lastBackup) : null;
-  const hoursSince = last ? (Date.now() - last) / 3600000 : Infinity;
-  if (hoursSince >= 20) {
-    // Drive sync only ever runs from the explicit Sync button (manualDriveSyncNow).
-    // This periodic safety net always falls back to a local download, even if
-    // Drive is connected and a token happens to be warm from opening Settings —
-    // merely opening Settings should never itself trigger a Drive backup.
-    silentAutoBackup();
-  }
+  const ds = getDriveSyncState();
+  const candidates = [state.meta.lastBackup, ds.lastSync].filter(Boolean).map(d => new Date(d).getTime());
+  if (candidates.length === 0) return null;
+  const mostRecent = Math.max(...candidates);
+  return Math.floor((Date.now() - mostRecent) / 86400000);
 }
 
 function importBackup(event) {
