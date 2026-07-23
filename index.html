@@ -1032,6 +1032,52 @@ function showConfirm({ title, message, confirmLabel = 'Confirm', danger = false,
   if (requireText) setTimeout(() => overlay.querySelector('#confirmInputField')?.focus(), 50);
 }
 
+// Lets the user manually set (or clear) today's logged workout duration, overriding
+// the timestamp-derived estimate. Opened by tapping the ✏️ next to the Duration
+// metric on the Today card.
+function openDurationEditModal(dateKey, dayLabel, sessionNum, currentMins) {
+  const hasOverride = getDurationOverride(dateKey, dayLabel, sessionNum) != null;
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <h3>Edit Duration</h3>
+      <div class="meta" style="margin-bottom:0;">Set how long today's ${escapeHtml(dayLabel)} session actually took.</div>
+      <div class="row" style="align-items:center; gap:8px; margin-top:12px;">
+        <input type="number" inputmode="numeric" min="1" max="600" class="confirm-input" id="durationInputField"
+          placeholder="Minutes" value="${currentMins != null ? currentMins : ''}" style="flex:1;">
+        <span class="meta" style="margin:0;">min</span>
+      </div>
+      <div class="row" style="margin-top:16px; gap:8px;">
+        <button class="btn secondary" id="durationCancelBtn" style="flex:1;">Cancel</button>
+        ${hasOverride ? '<button class="btn secondary" id="durationClearBtn" style="flex:1;">Reset to Auto</button>' : ''}
+        <button class="btn" id="durationSaveBtn" style="flex:1;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#durationCancelBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  const field = overlay.querySelector('#durationInputField');
+  overlay.querySelector('#durationClearBtn')?.addEventListener('click', () => {
+    setDurationOverride(dateKey, dayLabel, sessionNum, null);
+    close();
+    renderPreservingScroll();
+  });
+  overlay.querySelector('#durationSaveBtn').onclick = () => {
+    const mins = Math.round(Number(field.value));
+    if (!mins || mins <= 0 || mins > 600) {
+      field.style.borderColor = 'var(--danger)';
+      field.focus();
+      return;
+    }
+    setDurationOverride(dateKey, dayLabel, sessionNum, mins);
+    close();
+    renderPreservingScroll();
+  };
+  setTimeout(() => { field.focus(); field.select(); }, 50);
+}
+
 // Session starts are scoped per (calendar date + workout day label + session number),
 // so doing two different workouts on the same date - or the SAME workout twice in one
 // day - each get their own independent start time. Session 1 keeps the plain old key
@@ -1408,7 +1454,30 @@ function recordPR(exName, value, unit) {
   return entry;
 }
 
+// A manually-entered duration always wins over the timestamp-derived estimate —
+// lets the user correct a session where the auto-calculated time was thrown off
+// (e.g. a paused/interrupted workout, or logging sets well after actually finishing).
+function getDurationOverride(dateKey, dayLabel, sessionNum = 1) {
+  const key = sessionKey(dateKey, dayLabel, sessionNum);
+  const val = state.durationOverrides && state.durationOverrides[key];
+  return (typeof val === 'number' && val > 0) ? val : null;
+}
+
+function setDurationOverride(dateKey, dayLabel, sessionNum, mins) {
+  state.durationOverrides = state.durationOverrides || {};
+  const key = sessionKey(dateKey, dayLabel, sessionNum);
+  if (mins == null) {
+    delete state.durationOverrides[key]; // revert to auto-calculated
+  } else {
+    state.durationOverrides[key] = mins;
+  }
+  saveState();
+}
+
 function getSessionDuration(dateKey, dayLabel, sessionNum = 1) {
+  const override = getDurationOverride(dateKey, dayLabel, sessionNum);
+  if (override != null) return override;
+
   const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
   const sessionStart = state.sessionStarts && state.sessionStarts[sessionKey(dateKey, dayLabel, sessionNum)];
 
@@ -2732,6 +2801,7 @@ function getTodayDashboardStats() {
     day, completionPct, completedCount, remainingCount, setsToday, volumeToday,
     durationSoFar, estFinishMins, prsToday, streak, consistencyPct, recovery,
     score, grade: scoreToGrade(score), volumeTrend, durationTrend,
+    anchorDate, sessionNum,
   };
 }
 
@@ -2760,7 +2830,7 @@ function generateIntelligentSummary(stats) {
 function renderTodayHeader() {
   const stats = getTodayDashboardStats();
   if (!stats) return '';
-  const { day, completionPct, completedCount, remainingCount, setsToday, volumeToday, durationSoFar, estFinishMins, prsToday, streak, consistencyPct, recovery, score, grade, volumeTrend, durationTrend } = stats;
+  const { day, completionPct, completedCount, remainingCount, setsToday, volumeToday, durationSoFar, estFinishMins, prsToday, streak, consistencyPct, recovery, score, grade, volumeTrend, durationTrend, anchorDate, sessionNum } = stats;
 
   const trendChip = (t) => t ? `<span style="color:${t.colorVar}; font-weight:700;">${t.arrow}${t.pct != null ? ' ' + Math.abs(t.pct) + '%' : ''}</span>` : '';
   const recoveryDot = recovery.level === 'good' ? 'var(--success)' : recovery.level === 'low' ? 'var(--danger)' : 'var(--text-faint)';
@@ -2769,6 +2839,16 @@ function renderTodayHeader() {
     <div class="dash-metric">
       <div class="dash-metric-label">${label}</div>
       <div class="dash-metric-val">${val} ${trend ? trendChip(trend) : ''}</div>
+    </div>`;
+
+  const durationEditAttr = `openDurationEditModal('${anchorDate}', '${escapeHtml(day.label).replace(/'/g, "\\'")}', ${sessionNum}, ${durationSoFar != null ? durationSoFar : 'null'})`;
+  const durationMetric = `
+    <div class="dash-metric">
+      <div class="dash-metric-label">Duration</div>
+      <div class="dash-metric-val" style="cursor:pointer;" onclick="${durationEditAttr}">
+        ${durationSoFar != null ? formatDuration(durationSoFar) : '—'} ${durationTrend ? trendChip(durationTrend) : ''}
+        <span style="opacity:.55; font-size:11px;">✏️</span>
+      </div>
     </div>`;
 
   return `<div class="card dash-header">
@@ -2788,7 +2868,7 @@ function renderTodayHeader() {
       ${metric('Remaining', remainingCount)}
       ${metric('Sets Done', setsToday)}
       ${metric('Volume', volumeToday.toLocaleString() + ' lb', volumeTrend)}
-      ${metric('Duration', durationSoFar != null ? formatDuration(durationSoFar) : '—', durationTrend)}
+      ${durationMetric}
       ${metric('Est. Finish', estFinishMins != null ? `in ~${estFinishMins}m` : '—')}
       ${metric('Streak', streak + 'w 🔥')}
       ${metric('Consistency', consistencyPct != null ? consistencyPct + '%' : '—')}
