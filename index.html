@@ -1535,20 +1535,21 @@ let chartRange = '90'; // 'all' | '90' | '30' (days) — defaults to most recent
 // of the viewport and how far scrolled into it we were, then restore relative
 // to that same card after the switch. This keeps you looking at the same
 // section (e.g. the chart) even if everything above it changed height.
-const PROGRESS_SCROLL_ANCHORS = ['pcard-overview','pcard-prs','pcard-balance','pcard-bests','pcard-duration','pcard-progression'];
-
+// Cards are found dynamically (any `.card[id]` inside #app, in DOM order)
+// rather than a hardcoded id list, so this works for both the Progress
+// view's fixed pcard-* cards and the Workout view's per-exercise
+// card-${ex.id} cards.
 function captureScrollAnchor() {
   const HEADER_BUFFER = 90; // roughly the height of the sticky header/tab bar
+  const cards = document.querySelectorAll('#app .card[id]');
   let best = null;
-  for (const id of PROGRESS_SCROLL_ANCHORS) {
-    const el = document.getElementById(id);
-    if (!el) continue;
+  for (const el of cards) {
     const top = el.getBoundingClientRect().top;
     if (top <= HEADER_BUFFER) {
-      best = { id, offsetFromTop: top }; // keep overwriting; last match = closest to top
+      best = { id: el.id, offsetFromTop: top }; // keep overwriting; last match = closest to top
     } else if (best === null) {
       // Nothing has scrolled past the header yet — anchor to the first card we can find
-      best = { id, offsetFromTop: top };
+      best = { id: el.id, offsetFromTop: top };
       break;
     }
   }
@@ -2318,8 +2319,8 @@ function startHoldTimer(exId, setIdx) {
   fab.style.display = 'flex';
   fab.classList.remove('urgent');
   updateFab();
-  if (navigator.vibrate) navigator.vibrate(20);
-  render();
+  vibratePattern(20);
+  renderPreservingScroll();
   timerInterval = setInterval(() => {
     restRemaining--;
     if (restRemaining <= 0) {
@@ -2357,31 +2358,105 @@ function skipTimer() {
   fab.style.display = 'none';
   fab.classList.remove('urgent');
 }
+// Timer sound/vibration are separate per-device toggles (like theme/focus
+// mode) covering the rest/hold timer's countdown tick and end-of-timer
+// alarm — the alerts people are most likely to want to silence (e.g. in a
+// quiet gym) independent of the tap-feedback haptics used elsewhere in the
+// app. Both default on since that's the existing behavior.
+function getTimerSoundEnabled() {
+  const v = localStorage.getItem('liftlog_timer_sound');
+  return v === null ? true : v === '1';
+}
+function setTimerSoundEnabled(on) {
+  localStorage.setItem('liftlog_timer_sound', on ? '1' : '0');
+  render();
+}
+function getTimerVibrationEnabled() {
+  const v = localStorage.getItem('liftlog_timer_vibration');
+  return v === null ? true : v === '1';
+}
+function setTimerVibrationEnabled(on) {
+  localStorage.setItem('liftlog_timer_vibration', on ? '1' : '0');
+  render();
+}
+function vibratePattern(pattern) {
+  if (getTimerVibrationEnabled() && navigator.vibrate) navigator.vibrate(pattern);
+}
+
+// One entry per selectable timer sound: the oscillator waveform plus the
+// tick pitch and the (two-note, alternating) alarm pitches. Same
+// one-object-per-variant shape as EXERCISE_MODES — add a new tone by adding
+// one entry here, nothing else needs to change.
+const TIMER_TONES = {
+  classic: { name: 'Classic', type: 'square',   tickFreq: 1046, alarmFreqs: [1318, 988] },
+  soft:    { name: 'Soft',    type: 'sine',     tickFreq: 784,  alarmFreqs: [988, 740] },
+  digital: { name: 'Digital', type: 'sawtooth', tickFreq: 1568, alarmFreqs: [1760, 1318] },
+  chime:   { name: 'Chime',   type: 'triangle', tickFreq: 1318, alarmFreqs: [1568, 1174] },
+};
+function getTimerTone() {
+  const v = localStorage.getItem('liftlog_timer_tone');
+  return TIMER_TONES[v] ? v : 'classic';
+}
+function setTimerTone(key) {
+  localStorage.setItem('liftlog_timer_tone', key);
+  render();
+}
+// Stored as 0-100 (a friendlier unit for a slider); applied to beep() as a
+// 0-1 gain multiplier.
+function getTimerVolume() {
+  const v = localStorage.getItem('liftlog_timer_volume');
+  const n = v === null ? 100 : parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 100;
+}
+function setTimerVolume(pct) {
+  localStorage.setItem('liftlog_timer_volume', String(Math.min(100, Math.max(0, Math.round(pct)))));
+}
+// Bound to the slider's oninput (fires continuously while dragging). A full
+// render() here would destroy/recreate the slider mid-drag and cancel the
+// gesture, so this just persists the value and patches the % label directly.
+function setTimerVolumeLive(pct) {
+  setTimerVolume(pct);
+  const label = document.getElementById('timerVolumeLabel');
+  if (label) label.textContent = Math.round(pct) + '%';
+}
 function beep(freq, gain, durationMs, type) {
+  if (!getTimerSoundEnabled()) return;
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator(); const g = ctx.createGain();
     o.type = type || 'square';
     o.connect(g); g.connect(ctx.destination);
-    o.frequency.value = freq; g.gain.value = gain;
+    o.frequency.value = freq; g.gain.value = gain * (getTimerVolume() / 100);
     o.start(); setTimeout(() => { o.stop(); ctx.close(); }, durationMs);
   } catch(e) {}
 }
 function countdownTick() {
-  // Sharp, loud tick each second for the final 5-second countdown
-  beep(1046, 0.55, 150, 'square');
-  if (navigator.vibrate) navigator.vibrate(180);
+  // Sharp tick each second for the final 5-second countdown
+  const tone = TIMER_TONES[getTimerTone()];
+  beep(tone.tickFreq, 0.55, 150, tone.type);
+  vibratePattern(180);
 }
 function finalAlarm() {
-  // Loud, long, repeated alarm signaling rest is fully over
-  const pattern = [500,150,500,150,500,150,500,150,700];
-  if (navigator.vibrate) navigator.vibrate(pattern);
+  // Long, repeated alarm signaling rest is fully over
+  vibratePattern([500,150,500,150,500,150,500,150,700]);
+  const tone = TIMER_TONES[getTimerTone()];
   let i = 0;
   const alarmInterval = setInterval(() => {
-    beep(i % 2 === 0 ? 1318 : 988, 0.85, 350, 'square');
+    beep(tone.alarmFreqs[i % 2], 0.85, 350, tone.type);
     i++;
     if (i >= 5) clearInterval(alarmInterval);
   }, 400);
+}
+// Lets Settings preview the current tone/volume on demand without waiting
+// for a real timer to run down. Temporarily overrides the sound-enabled
+// check so the preview plays even while the person is deciding whether to
+// turn sound on.
+function previewTimerSound() {
+  const wasEnabled = getTimerSoundEnabled();
+  if (!wasEnabled) localStorage.setItem('liftlog_timer_sound', '1');
+  const tone = TIMER_TONES[getTimerTone()];
+  beep(tone.tickFreq, 0.55, 150, tone.type);
+  if (!wasEnabled) localStorage.setItem('liftlog_timer_sound', '0');
 }
 
 // ---------- RENDER ----------
@@ -3911,6 +3986,30 @@ function renderManage() {
         <div class="tab" style="${!getFocusMode()?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setFocusMode(false)">☰ Full list</div>
       </div>
       <div class="meta" style="margin-top:8px; margin-bottom:0;">Focus shows one exercise at a time and auto-advances as you finish each one — no scrolling needed. Full list shows everything at once, like before.</div>
+    </div>
+    <div class="card">
+      <h3>⏱ Timer Alerts</h3>
+      <label class="row" style="margin-top:8px; align-items:center; gap:8px; cursor:pointer;">
+        <input type="checkbox" ${getTimerSoundEnabled() ? 'checked' : ''} onchange="setTimerSoundEnabled(this.checked)">
+        <span class="meta" style="margin:0;">Sound (countdown tick + end-of-timer alarm)</span>
+      </label>
+      <label class="row" style="margin-top:8px; align-items:center; gap:8px; cursor:pointer;">
+        <input type="checkbox" ${getTimerVibrationEnabled() ? 'checked' : ''} onchange="setTimerVibrationEnabled(this.checked)">
+        <span class="meta" style="margin:0;">Vibration (countdown tick + end-of-timer alarm)</span>
+      </label>
+      <div class="meta" style="margin-top:10px; margin-bottom:4px;">Tone</div>
+      <div class="tabs" style="padding:0; background:transparent; margin-top:0;">
+        ${Object.entries(TIMER_TONES).map(([key, t]) =>
+          `<div class="tab" style="${getTimerTone()===key?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTimerTone('${key}')">${escapeHtml(t.name)}</div>`
+        ).join('')}
+      </div>
+      <div class="row" style="margin-top:10px; align-items:center; gap:8px;">
+        <span class="meta" style="margin:0; white-space:nowrap;">🔉 Volume</span>
+        <input type="range" min="0" max="100" value="${getTimerVolume()}" style="flex:1;" oninput="setTimerVolumeLive(this.value)">
+        <span class="meta" id="timerVolumeLabel" style="margin:0; width:34px; text-align:right;">${getTimerVolume()}%</span>
+      </div>
+      <button class="btn small secondary" style="margin-top:8px;" onclick="previewTimerSound()">▶ Test sound</button>
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Applies to the rest and hold (plank-style) timers. Turn either off for a quiet gym — the timer still runs and the FAB still counts down either way.</div>
     </div>
     <div class="card">
       <div class="row"><h3>Manage Days</h3><button class="btn small" onclick="addDay()">+ Add Day</button></div>
