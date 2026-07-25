@@ -281,13 +281,28 @@
     border: 2.5px solid rgba(255,255,255,.25);
   }
   .timer-fab .fablabel { font-size: 10.5px; font-weight: 700; letter-spacing: 1.5px; opacity: .9; margin-bottom: 2px; }
+  /* Hold (plank-style) timer: bigger and centered on screen in green, since
+     you're mid-hold and not looking at a corner of the phone — the rest
+     timer stays the small bottom-right FAB since you're actively moving
+     between exercises during it. */
+  .timer-fab.hold-mode {
+    left: 50%; right: auto; bottom: auto; top: 42%; transform: translate(-50%, -50%);
+    width: 210px; height: 210px; border-radius: 105px;
+    background: linear-gradient(155deg, #4ee08a, #1fa855);
+    font-size: 46px;
+    box-shadow: 0 12px 44px rgba(31,168,85,.5);
+    border: 3px solid rgba(255,255,255,.3);
+  }
+  .timer-fab.hold-mode .fablabel { font-size: 15px; letter-spacing: 2.5px; margin-bottom: 4px; }
   .timer-extend-btn {
     position: fixed; right: 16px; bottom: 198px; padding: 9px 16px; border-radius: 20px;
     background: var(--surface-raised); color: var(--text); border: 1.5px solid var(--border-strong);
     font-size: 13px; font-weight: 800; z-index: 20; box-shadow: 0 4px 14px rgba(0,0,0,.3);
     display: flex; align-items: center; justify-content: center;
   }
+  .timer-extend-btn.hold-mode { right: auto; left: 50%; bottom: 90px; transform: translateX(-50%); padding: 11px 20px; font-size: 14px; }
   .timer-extend-btn:active { transform: scale(.94); }
+  .timer-extend-btn.hold-mode:active { transform: translateX(-50%) scale(.94); }
   .timer-flash-overlay {
     position: fixed; inset: 0; background: #fff; z-index: 999; pointer-events: none;
     animation: timerFlashPulse 0.9s ease-out;
@@ -300,10 +315,19 @@
     0%, 100% { transform: scale(1); }
     50% { transform: scale(1.12); }
   }
+  @keyframes urgentPulseCentered {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.12); }
+  }
   .timer-fab.urgent {
     background: linear-gradient(155deg, #ff3b3b, #d81f1f);
     animation: urgentPulse 0.5s ease-in-out infinite;
     box-shadow: 0 8px 28px rgba(255,40,40,.65);
+  }
+  .timer-fab.hold-mode.urgent {
+    background: linear-gradient(155deg, #ff3b3b, #d81f1f);
+    animation: urgentPulseCentered 0.5s ease-in-out infinite;
+    box-shadow: 0 12px 44px rgba(255,40,40,.55);
   }
   .badge {
     font-size: 10.5px; font-weight: 700; letter-spacing: -0.01em; padding: 3px 9px;
@@ -2299,6 +2323,7 @@ function startRestTimer(seconds) {
   const fab = document.getElementById('timerFab');
   fab.style.display = 'flex';
   fab.classList.remove('urgent');
+  applyTimerModeClass();
   updateFab();
   showExtendBtn();
   requestWakeLock();
@@ -2338,6 +2363,7 @@ function startHoldTimer(exId, setIdx) {
   const fab = document.getElementById('timerFab');
   fab.style.display = 'flex';
   fab.classList.remove('urgent');
+  applyTimerModeClass();
   updateFab();
   showExtendBtn();
   requestWakeLock();
@@ -2374,6 +2400,15 @@ function updateFab() {
   const m = Math.floor(restRemaining/60), s = restRemaining%60;
   fab.innerHTML = `<span class="fablabel">${timerKind === 'hold' ? 'HOLD' : 'REST'}</span>${m}:${s.toString().padStart(2,'0')}`;
 }
+// Hold timers get a bigger, green, centrally-floating look (you're mid-hold,
+// not glancing at a phone corner); rest timers keep the small corner FAB.
+// Reads the current global timerKind, so call it any time that's changed.
+function applyTimerModeClass() {
+  const isHold = timerKind === 'hold';
+  document.getElementById('timerFab').classList.toggle('hold-mode', isHold);
+  const btn = document.getElementById('timerExtendBtn');
+  if (btn) btn.classList.toggle('hold-mode', isHold);
+}
 // Adds time to whichever timer (rest or hold) is currently running. Reuses
 // the same restRemaining/timerInterval the countdown already ticks on, so
 // no separate state — the running interval just picks up the new value on
@@ -2401,6 +2436,7 @@ function skipTimer() {
   const fab = document.getElementById('timerFab');
   fab.style.display = 'none';
   fab.classList.remove('urgent');
+  applyTimerModeClass();
   hideExtendBtn();
   releaseWakeLock();
 }
