@@ -2906,7 +2906,37 @@ function renderWorkout() {
   return `<div class="tabs" id="workoutDayTabs">${tabs}</div><main>${startBar}${completeBanner}${modeToggle}${body}</main>`;
 }
 
+// A "session" is currently identified by (calendar date, workout day, session
+// number) — but older/simpler history entries don't carry a distinct session
+// number, so if you log a workout in two separate real-world sittings on the
+// same calendar date (e.g. abs in the afternoon, forearms that evening), both
+// sittings land under the same session bucket. Taking a flat max-minus-min
+// timestamp span across that whole bucket then reports an absurd multi-hour
+// "duration" — the gap between sittings, not any actual workout. Splitting on
+// any gap this large and keeping only the largest contiguous cluster fixes
+// that without touching session identity anywhere else in the app (today's-
+// completion checks, redo, etc. all still key off the original grouping).
+const MAX_SESSION_GAP_MINUTES = 120;
+function computeSessionSpanMinutes(times) {
+  const sorted = [...times].sort((a,b) => a - b);
+  let clusters = [[sorted[0]]];
+  for (let i = 1; i < sorted.length; i++) {
+    const gapMin = (sorted[i] - sorted[i-1]) / 60000;
+    if (gapMin > MAX_SESSION_GAP_MINUTES) clusters.push([sorted[i]]);
+    else clusters[clusters.length - 1].push(sorted[i]);
+  }
+  clusters.sort((a,b) => b.length - a.length || (Math.max(...b)-Math.min(...b)) - (Math.max(...a)-Math.min(...a)));
+  const best = clusters[0];
+  if (best.length < 2) return null; // largest real cluster still isn't enough to time a workout
+  return Math.round((Math.max(...best) - Math.min(...best)) / 60000);
+}
+
 function getMuscleGroupDurationStats(dayLabel) {
+  const day = DAYS.find(d => d.label === dayLabel);
+  const { anchorDate: curAnchor, sessionNum: curSessionNum } = getActiveSession(dayLabel);
+  const currentIsIncomplete = day ? getTodayCompletionPct(day) < 100 : false;
+  const currentHasOverride = getDurationOverride(curAnchor, dayLabel, curSessionNum) != null;
+
   const seen = new Map();
   state.history.filter(h => h.day === dayLabel).forEach(h => {
     const dk = getEntryDateKey(h);
@@ -2914,12 +2944,17 @@ function getMuscleGroupDurationStats(dayLabel) {
     const key = dk + '__s' + num;
     if (!seen.has(key)) seen.set(key, { dateKey: dk, sessionNum: num });
   });
-  const sessions = [...seen.values()].sort((a,b) => a.dateKey.localeCompare(b.dateKey) || a.sessionNum - b.sessionNum);
+  let sessions = [...seen.values()].sort((a,b) => a.dateKey.localeCompare(b.dateKey) || a.sessionNum - b.sessionNum);
+  if (currentIsIncomplete && !currentHasOverride) {
+    sessions = sessions.filter(s => !(s.dateKey === curAnchor && s.sessionNum === curSessionNum));
+  }
   const durationsWithDate = sessions.map(({dateKey, sessionNum}) => {
+    const override = getDurationOverride(dateKey, dayLabel, sessionNum);
+    if (override != null) return { date: dateKey, mins: override };
     const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
     if (entries.length < 2) return null;
-    const times = entries.map(h => new Date(h.date).getTime());
-    return { date: dateKey, mins: Math.round((Math.max(...times) - Math.min(...times)) / 60000) };
+    const mins = computeSessionSpanMinutes(entries.map(h => new Date(h.date).getTime()));
+    return mins == null ? null : { date: dateKey, mins };
   }).filter(d => d != null);
   if (durationsWithDate.length === 0) return null;
   const durations = durationsWithDate.map(d => d.mins);
@@ -2954,6 +2989,16 @@ function toggleRadarOptions() {
 // all-time average would be slow to reflect a workout that's gotten faster
 // or slower lately.
 function getRecentAvgDuration(dayLabel, n = 3) {
+  // If this day's workout is being logged right now and isn't finished yet,
+  // its elapsed-so-far time isn't a real "how long this workout took" —
+  // averaging it in would both understate the time and keep changing the
+  // number as more sets get logged. Drop it from the pool so "last N" always
+  // means N finished workouts, not N-1 finished plus one still in progress.
+  const day = DAYS.find(d => d.label === dayLabel);
+  const { anchorDate: curAnchor, sessionNum: curSessionNum } = getActiveSession(dayLabel);
+  const currentIsIncomplete = day ? getTodayCompletionPct(day) < 100 : false;
+  const currentHasOverride = getDurationOverride(curAnchor, dayLabel, curSessionNum) != null;
+
   const seen = new Map();
   state.history.filter(h => h.day === dayLabel).forEach(h => {
     const dk = getEntryDateKey(h);
@@ -2961,12 +3006,17 @@ function getRecentAvgDuration(dayLabel, n = 3) {
     const key = dk + '__s' + num;
     if (!seen.has(key)) seen.set(key, { dateKey: dk, sessionNum: num });
   });
-  const sessions = [...seen.values()].sort((a,b) => a.dateKey.localeCompare(b.dateKey) || a.sessionNum - b.sessionNum).slice(-n);
+  let sessions = [...seen.values()].sort((a,b) => a.dateKey.localeCompare(b.dateKey) || a.sessionNum - b.sessionNum);
+  if (currentIsIncomplete && !currentHasOverride) {
+    sessions = sessions.filter(s => !(s.dateKey === curAnchor && s.sessionNum === curSessionNum));
+  }
+  sessions = sessions.slice(-n);
   const durations = sessions.map(({dateKey, sessionNum}) => {
+    const override = getDurationOverride(dateKey, dayLabel, sessionNum);
+    if (override != null) return override;
     const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
     if (entries.length < 2) return null;
-    const times = entries.map(h => new Date(h.date).getTime());
-    return Math.round((Math.max(...times) - Math.min(...times)) / 60000);
+    return computeSessionSpanMinutes(entries.map(h => new Date(h.date).getTime()));
   }).filter(d => d != null);
   if (durations.length === 0) return null;
   return { mean: Math.round(durations.reduce((a,b) => a+b, 0) / durations.length), count: durations.length };
