@@ -2666,7 +2666,7 @@ function render() {
   else if (view === 'manage') app.innerHTML = renderManage();
   else app.innerHTML = renderHistory();
 
-  if (view === 'progress') setTimeout(renderCharts, 0);
+  if (view === 'progress') { setTimeout(renderCharts, 0); setTimeout(renderDurationRadarChart, 0); }
   requestAnimationFrame(scrollActiveTabsIntoView);
 }
 
@@ -2926,6 +2926,50 @@ function getMuscleGroupDurationStats(dayLabel) {
   const mean = Math.round(durations.reduce((a,b) => a+b, 0) / durations.length);
   const last = durationsWithDate[durationsWithDate.length - 1];
   return { mean, min: Math.min(...durations), max: Math.max(...durations), count: durations.length, last: last.mins, lastDate: last.date };
+}
+
+// How many recent workouts the "Recent Pace" spider chart averages over —
+// user-configurable behind the chart's ⚙️ icon, default 3.
+function getRadarSessionCount() {
+  const v = localStorage.getItem('liftlog_radar_session_count');
+  const n = v === null ? 3 : parseInt(v, 10);
+  return [2, 3, 5, 10].includes(n) ? n : 3;
+}
+function setRadarSessionCount(n) {
+  localStorage.setItem('liftlog_radar_session_count', String(n));
+  renderPreservingScroll();
+}
+// Whether the session-count options panel is expanded — in-memory only
+// (not persisted), since it's just a UI toggle, not a preference.
+let radarOptionsOpen = false;
+function toggleRadarOptions() {
+  radarOptionsOpen = !radarOptionsOpen;
+  const panel = document.getElementById('radarOptionsPanel');
+  if (panel) panel.style.display = radarOptionsOpen ? 'block' : 'none';
+}
+
+// Same session-grouping as getMuscleGroupDurationStats above, but averaged
+// over only the most recent n sessions for that workout group instead of
+// all-time — this is what feeds the "recent pace" spider chart, since an
+// all-time average would be slow to reflect a workout that's gotten faster
+// or slower lately.
+function getRecentAvgDuration(dayLabel, n = 3) {
+  const seen = new Map();
+  state.history.filter(h => h.day === dayLabel).forEach(h => {
+    const dk = getEntryDateKey(h);
+    const num = getEntrySessionNum(h);
+    const key = dk + '__s' + num;
+    if (!seen.has(key)) seen.set(key, { dateKey: dk, sessionNum: num });
+  });
+  const sessions = [...seen.values()].sort((a,b) => a.dateKey.localeCompare(b.dateKey) || a.sessionNum - b.sessionNum).slice(-n);
+  const durations = sessions.map(({dateKey, sessionNum}) => {
+    const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
+    if (entries.length < 2) return null;
+    const times = entries.map(h => new Date(h.date).getTime());
+    return Math.round((Math.max(...times) - Math.min(...times)) / 60000);
+  }).filter(d => d != null);
+  if (durations.length === 0) return null;
+  return { mean: Math.round(durations.reduce((a,b) => a+b, 0) / durations.length), count: durations.length };
 }
 
 function getOverviewStats() {
@@ -3254,6 +3298,23 @@ function renderProgress() {
       <h3>⏱ Session Time by Day</h3>
       ${durationByDay}
     </div>
+    <div class="card" id="pcard-duration-radar">
+      <div class="row" style="align-items:center;">
+        <h3 style="margin:0;">🕸️ Recent Pace <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(avg of last ${getRadarSessionCount()} workouts per group)</span></h3>
+        <span onclick="toggleRadarOptions()" style="cursor:pointer; font-size:17px; padding:2px 4px;" title="Change how many recent workouts to average">⚙️</span>
+      </div>
+      <div id="radarOptionsPanel" style="display:${radarOptionsOpen ? 'block' : 'none'}; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-strong);">
+        <div class="meta" style="margin-bottom:6px;">Average over last…</div>
+        <div class="tabs" style="padding:0; background:transparent; margin-top:0;">
+          ${[2, 3, 5, 10].map(n =>
+            `<div class="tab" style="${getRadarSessionCount()===n?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setRadarSessionCount(${n})">${n} workouts</div>`
+          ).join('')}
+        </div>
+      </div>
+      ${DAYS.length >= 3 ? `<div style="position:relative; height:280px; margin-top:12px;"><canvas id="durationRadarChart"></canvas></div>`
+        : `<div class="empty" style="padding:10px 0;">Add at least 3 workout days to compare them on a spider chart.</div>`}
+      <div class="meta" id="durationRadarNote" style="margin-top:6px; margin-bottom:0;"></div>
+    </div>
     <div class="card" id="pcard-progression" style="padding:0; overflow:hidden;">
       <div class="tabs" id="progressDayTabs" style="border-radius:16px 16px 0 0;">${progTabs}</div>
       <div style="padding:16px;">
@@ -3471,6 +3532,83 @@ function renderCharts() {
         }
       },
       scales: { x:{ ticks:{ color: textDimColor } }, y:{ ticks:{ color: textDimColor }, beginAtZero:false } }
+    }
+  });
+}
+
+// Spider/radar chart: one axis per workout day, plotting the average
+// session length across just that day's last 3 logged workouts (not
+// all-time) so it reflects how the workout has been going *lately* — a day
+// that's gotten faster or slower recently shows up right away instead of
+// being smoothed out by months of history.
+let durationRadarRef = null;
+function renderDurationRadarChart() {
+  const canvas = document.getElementById('durationRadarChart');
+  const note = document.getElementById('durationRadarNote');
+  if (durationRadarRef) { durationRadarRef.destroy(); durationRadarRef = null; }
+  if (!canvas) return;
+
+  const n = getRadarSessionCount();
+  const rows = DAYS.map(d => ({ day: d, stats: getRecentAvgDuration(d.label, n) }));
+  const hasAnyData = rows.some(r => r.stats);
+  const missing = rows.filter(r => !r.stats).map(r => r.day.label);
+  if (note) {
+    note.textContent = !hasAnyData ? 'Log a few workouts to see this fill in.'
+      : missing.length ? `Not enough recent data for: ${missing.join(', ')} — shown at center.` : '';
+  }
+  if (!hasAnyData) return;
+
+  const cssVars = getComputedStyle(document.documentElement);
+  const textColor = cssVars.getPropertyValue('--text').trim() || '#e8e8ec';
+  const textFaintColor = cssVars.getPropertyValue('--text-faint').trim() || '#565b6c';
+  const gridColor = cssVars.getPropertyValue('--border-strong').trim() || 'rgba(255,255,255,.12)';
+  const accent = cssVars.getPropertyValue('--accent').trim() || '#5b7fff';
+
+  const values = rows.map(r => r.stats ? r.stats.mean : 0);
+  const suggestedMax = Math.max(20, Math.ceil((Math.max(...values) * 1.25) / 10) * 10);
+
+  durationRadarRef = new Chart(canvas, {
+    type: 'radar',
+    data: {
+      labels: rows.map(r => `${r.day.icon} ${r.day.label}`),
+      datasets: [{
+        label: `Avg minutes (last ${n})`,
+        data: values,
+        backgroundColor: accent + '2E',
+        borderColor: accent,
+        borderWidth: 2.5,
+        pointBackgroundColor: rows.map(r => r.day.color),
+        pointBorderColor: '#fff',
+        pointBorderWidth: 2,
+        pointRadius: rows.map(r => r.stats ? 5 : 3),
+        pointHoverRadius: 7,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const r = rows[ctx.dataIndex];
+              return r.stats ? `${r.stats.mean} min avg (${r.stats.count} session${r.stats.count>1?'s':''})` : 'Not enough data yet';
+            }
+          }
+        }
+      },
+      scales: {
+        r: {
+          min: 0,
+          suggestedMax,
+          angleLines: { color: gridColor },
+          grid: { color: gridColor },
+          pointLabels: { color: textColor, font: { size: 12, weight: '700' } },
+          ticks: { color: textFaintColor, backdropColor: 'transparent' }
+        }
+      }
     }
   });
 }
