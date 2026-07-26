@@ -1177,7 +1177,7 @@ function getEntrySessionNum(h) {
 function getWeekKey(date) {
   const d = new Date(date);
   d.setHours(0,0,0,0);
-  d.setDate(d.getDate() - d.getDay()); // back to Sunday
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // back to Monday (JS getDay: Sun=0..Sat=6)
   return dateStr(d);
 }
 
@@ -2162,15 +2162,25 @@ function finishExerciseConfirmed(ex) {
   }
 }
 
-// Longest-streak tracking, used only to decide whether the completion modal's
-// confetti should fire. Stored in state.meta alongside the existing backup
-// metadata fields — same pattern, no new top-level state shape.
+// Longest-streak tracking. Originally only updated at the exact moment the
+// completion modal fired, which meant it could fall behind the real current
+// streak indefinitely if that moment was ever missed (backfilled/edited
+// history, a modal that didn't fire, etc.) — see syncLongestStreak() below,
+// called on every render, for the fix. This function itself still just does
+// the compare-and-store; the modal uses its return value to decide whether
+// to show "new best!".
 function checkAndUpdateLongestStreak(streak) {
   state.meta = state.meta || {};
   const prevBest = state.meta.longestStreak || 0;
   const isNewBest = streak > 0 && streak > prevBest;
   if (isNewBest) { state.meta.longestStreak = streak; saveState(); }
   return isNewBest;
+}
+// Keeps meta.longestStreak from silently falling behind the real current
+// streak. Cheap to call on every render — it's a no-op (no write, no
+// saveState) unless the current streak actually exceeds the stored best.
+function syncLongestStreak() {
+  checkAndUpdateLongestStreak(computeStreak());
 }
 
 // Lightweight count-up animation for the modal's stat numbers — 0 to target
@@ -2841,6 +2851,7 @@ function renderWorkout() {
   const streakEl = document.getElementById('streakBadge');
   if (streakEl) {
     const streak = computeStreak();
+    checkAndUpdateLongestStreak(streak);
     const thisWeek = getWeekWorkoutGroupCount(getWeekKey(new Date()));
     const weekPart = `${thisWeek}/${DAYS.length} muscle groups this week`;
     streakEl.textContent = streak > 0 ? `🔥 ${streak} week streak · ${weekPart}` : weekPart;
