@@ -1174,8 +1174,20 @@ function getEntrySessionNum(h) {
   return h.sessionNum || 1;
 }
 
+// new Date("YYYY-MM-DD") is parsed as UTC midnight per spec, while
+// new Date(fullISOString) and new Date(dateObject) are parsed/interpreted in
+// local time — mixing the two silently shifts the calendar date by one day
+// in any timezone west of UTC (exactly what was breaking the streak
+// calculation: stepping a "date key" string back a week would land on the
+// wrong local day and skip a week entirely). This always produces the local
+// midnight for a plain date-key string, so stepping by days stays exact.
+function parseDateKey(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function getWeekKey(date) {
-  const d = new Date(date);
+  const d = (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? parseDateKey(date) : new Date(date);
   d.setHours(0,0,0,0);
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // back to Monday (JS getDay: Sun=0..Sat=6)
   return dateStr(d);
@@ -1188,11 +1200,14 @@ const WEEKLY_MIN_GROUPS = 3;
 // calendar days you happened to train on. Doing two different groups back to
 // back on one day counts as 2 here, same as doing them on two separate days
 // would; doing the same group twice in one day (an extra session) still only
-// counts once, since it's still just one muscle group worked that day.
+// counts once, since it's still just one muscle group worked that day. Uses
+// each entry's session-anchored date (getEntryDateKey), same as the dedup
+// key below, so a late-night workout that spans midnight is bucketed into
+// the week it started rather than the one its raw timestamp happens to fall in.
 function getWeekWorkoutGroupCount(weekKey) {
   const groupsInWeek = new Set(
     state.history
-      .filter(h => getWeekKey(h.date) === weekKey)
+      .filter(h => getWeekKey(getEntryDateKey(h)) === weekKey)
       .map(h => `${getEntryDateKey(h)}::${h.day}`)
   );
   return groupsInWeek.size;
@@ -1201,14 +1216,14 @@ function getWeekWorkoutGroupCount(weekKey) {
 function computeStreak() {
   let cursorWeek = getWeekKey(new Date());
   if (getWeekWorkoutGroupCount(cursorWeek) < WEEKLY_MIN_GROUPS) {
-    const d = new Date(cursorWeek);
+    const d = parseDateKey(cursorWeek);
     d.setDate(d.getDate() - 7);
     cursorWeek = getWeekKey(d); // grace: this week isn't over yet, don't count it as a break
   }
   let count = 0;
   while (getWeekWorkoutGroupCount(cursorWeek) >= WEEKLY_MIN_GROUPS) {
     count++;
-    const d = new Date(cursorWeek);
+    const d = parseDateKey(cursorWeek);
     d.setDate(d.getDate() - 7);
     cursorWeek = getWeekKey(d);
   }
