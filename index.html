@@ -483,7 +483,6 @@
 // ---------- DATA ----------
 const DAY_PALETTE = ['#4f7cff', '#ff6b4a', '#3ecf6e', '#b06bff', '#ffcb4a', '#ff5c93', '#5ce1e6', '#f2a65a'];
 
-const WEIGHTS = [11, 22, 33, 44, 55]; // lb per dumbbell
 const BELT_INCREMENT = 5; // lb, weighted pull-up/chin-up belt, open-ended
 
 const DEFAULT_DAYS = [
@@ -550,7 +549,7 @@ const THEME_KEY = 'liftlog_theme';
 // The current shape of saved state. Bump this by 1 and add a matching entry
 // to MIGRATIONS below whenever a future change needs to transform old saved
 // data (or the DAYS config layered on top of it) into a new shape.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 // Each entry runs exactly once, the first time a state older than its
 // version is loaded — never on every load. They run in ascending order, and
@@ -585,6 +584,22 @@ const MIGRATIONS = [
           ex._repDefaultApplied = true;
           const live = state.exercises[ex.id];
           if (live && live.targetReps != null) live.targetReps = Math.min(Math.max(live.targetReps, ex.repLow), ex.repHigh);
+        }
+      }));
+    }
+  },
+  {
+    version: 3,
+    description: 'Convert "weighted" mode from a fixed 5-tier dumbbell array (11/22/33/44/55 lb) to a freely-editable weight number, so progression is no longer locked to those specific values.',
+    migrate(state, days) {
+      const LEGACY_WEIGHTS = [11, 22, 33, 44, 55];
+      days.forEach(day => day.exercises.forEach(ex => {
+        if (ex.mode !== 'weighted') return;
+        const live = state.exercises[ex.id];
+        if (live && live.tier != null && live.weight == null) {
+          const idx = Math.min(Math.max(live.tier, 0), LEGACY_WEIGHTS.length - 1);
+          live.weight = LEGACY_WEIGHTS[idx];
+          delete live.tier;
         }
       }));
     }
@@ -771,6 +786,7 @@ function getSetsMax(ex) { return ex.setsMax ?? (ex.sets + 2); }
 function getRepIncrement(ex) { return ex.repIncrement ?? ((ex.repLow ?? 0) >= 8 ? 2 : 1); }
 function getBeltIncrement(ex) { return ex.beltIncrement ?? BELT_INCREMENT; }
 function getTimeIncrement(ex) { return ex.timeIncrement ?? 10; }
+function getWeightIncrement(ex) { return ex.weightIncrement ?? 5; }
 
 // Double-progression dimension toggles ("what" progresses). Each defaults to
 // true (undefined behaves as enabled) so exercises created before this option
@@ -797,6 +813,7 @@ function progressesWeight(ex) { return ex.progressWeight !== false; }
 //   hasWeightControl              -> does the live view show a +/- weight control?
 //   weightLabel(ex, s)            -> text inside that control, if hasWeightControl
 //   adjustWeight(ex, s, dir)      -> mutate s for a live +/- weight tap; return {ok, reason}
+//   setWeight(ex, s, newWeight)   -> mutate s to an exact typed-in weight, if hasWeightControl
 //   successCheck(s, arr)          -> did every logged set hit the target?
 //   onSuccess(ex, s)              -> mutate s after a fully-hit session; return {message, leveledUp?}
 //   onFail(ex, s)                 -> mutate s after a missed session; return {message}
@@ -842,26 +859,27 @@ function deloadRepsOrSets(ex, s, repInc) {
 
 const EXERCISE_MODES = {
   weighted: {
-    initState: ex => ({ tier: 0, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak: 0 }),
+    initState: ex => ({ weight: ex.startWeight ?? 11, targetReps: ex.repLow, sets: getSetsMin(ex), failStreak: 0 }),
     getTargetValue: s => s.targetReps,
     usesProgressiveSets: true,
-    label: (ex, s) => `${WEIGHTS[s.tier]} lb x ${s.targetReps} reps x ${s.sets} sets`,
+    label: (ex, s) => `${s.weight} lb x ${s.targetReps} reps x ${s.sets} sets`,
     hasWeightControl: true,
-    weightLabel: (ex, s) => `${WEIGHTS[s.tier]} lb`,
+    weightLabel: (ex, s) => `${s.weight} lb`,
     adjustWeight: (ex, s, dir) => {
-      const newTier = Math.min(Math.max(s.tier + dir, 0), WEIGHTS.length - 1);
-      if (newTier === s.tier) return { ok: false, reason: dir > 0 ? 'Already at your heaviest dumbbell.' : 'Already at your lightest dumbbell.' };
-      s.tier = newTier;
+      const newWeight = Math.max(0, s.weight + dir * getWeightIncrement(ex));
+      if (newWeight === s.weight) return { ok: false, reason: 'Already at 0 lb.' };
+      s.weight = newWeight;
       return { ok: true };
     },
+    setWeight: (ex, s, newWeight) => { s.weight = Math.max(0, newWeight); },
     successCheck: (s, arr) => arr.every(x => x.value >= s.targetReps),
     onSuccess: (ex, s) => {
       s.failStreak = 0;
       const repSet = progressRepsAndSets(ex, s, getRepIncrement(ex));
       if (repSet.done) return { message: repSet.message };
-      if (progressesWeight(ex) && s.tier < WEIGHTS.length - 1) {
-        s.tier++; s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow;
-        return { message: `Weight up! Next: ${WEIGHTS[s.tier]} lb, back to ${getSetsMin(ex)} sets`, leveledUp: true };
+      if (progressesWeight(ex)) {
+        s.weight += getWeightIncrement(ex); s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow;
+        return { message: `Weight up! Next: ${s.weight} lb, back to ${getSetsMin(ex)} sets`, leveledUp: true };
       }
       return { message: 'Maxed out your enabled progression — try slower tempo instead.' };
     },
@@ -872,11 +890,11 @@ const EXERCISE_MODES = {
       s.failStreak = 0;
       const deload = deloadRepsOrSets(ex, s, getRepIncrement(ex));
       if (deload.done) return { message: deload.message };
-      if (progressesWeight(ex) && s.tier > 0) { s.tier--; s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow; return { message: 'Deload: dropped a weight tier' }; }
+      if (progressesWeight(ex) && s.weight > 0) { s.weight = Math.max(0, s.weight - getWeightIncrement(ex)); s.sets = getSetsMin(ex); if (progressesReps(ex)) s.targetReps = ex.repLow; return { message: 'Deload: dropped weight' }; }
       return { message: '' };
     },
-    sessionBestValue: (ex, s) => WEIGHTS[s.tier],
-    historyWeight: (ex, s) => WEIGHTS[s.tier],
+    sessionBestValue: (ex, s) => s.weight,
+    historyWeight: (ex, s) => s.weight,
     unit: 'lb',
     usesWeightAsBest: true,
   },
@@ -893,6 +911,7 @@ const EXERCISE_MODES = {
       s.addedWeight = newWeight;
       return { ok: true };
     },
+    setWeight: (ex, s, newWeight) => { s.addedWeight = Math.max(0, newWeight); },
     successCheck: (s, arr) => arr.every(x => x.value >= s.targetReps),
     onSuccess: (ex, s) => {
       s.failStreak = 0;
@@ -1251,7 +1270,7 @@ function estimate1RM(weight, reps) {
 
 // ---------- PREDICTION ENGINE ----------
 // Reusable forecasting layer built entirely on top of data the app already
-// tracks (state.history, EXERCISE_MODES, WEIGHTS). Nothing here duplicates
+// tracks (state.history, EXERCISE_MODES). Nothing here duplicates
 // the live progression algorithm in EXERCISE_MODES — it observes the
 // *outcomes* of that algorithm over time (weight/e1rm/volume per logged
 // session) and projects them forward. Every prediction is cached and only
@@ -1362,7 +1381,7 @@ function predictExercise(ex, horizonsMonths = [3, 6, 12, 24]) {
   // roughly 6 (brand new trend) to 18 (long track record) months.
   const tau = Math.min(18, 6 + points.length * 0.35);
 
-  const equipCeiling = ex.mode === 'weighted' ? estimate1RM(WEIGHTS[WEIGHTS.length-1], ex.repHigh || 12) : null;
+  const equipCeiling = null; // "weighted" mode no longer has a fixed equipment max (see EXERCISE_MODES.weighted)
 
   const projections = horizonsMonths.map(t => {
     // Asymptotic (diminishing-returns) growth curve: fast early, naturally
@@ -1384,7 +1403,10 @@ function predictExercise(ex, horizonsMonths = [3, 6, 12, 24]) {
     // assuming reps stay near the exercise's target rep ceiling.
     const targetReps = ex.repHigh || (points[points.length-1].sets ? Math.max(...points[points.length-1].sets) : 10);
     let predictedWorkingWeight = supportsWeight ? Math.round(predictedE1rm / (1 + targetReps / 30)) : null;
-    if (ex.mode === 'weighted') predictedWorkingWeight = WEIGHTS.reduce((best,w) => Math.abs(w-predictedWorkingWeight) < Math.abs(best-predictedWorkingWeight) ? w : best, WEIGHTS[0]);
+    if (ex.mode === 'weighted' && predictedWorkingWeight != null) {
+      const inc = getWeightIncrement(ex);
+      predictedWorkingWeight = Math.round(predictedWorkingWeight / inc) * inc;
+    }
 
     const currentWorkingWeight = supportsWeight ? (points[points.length-1].weight || 0) : null;
 
@@ -1415,7 +1437,6 @@ function generatePredictionInsights(ex) {
   const settings = getPredictionSettings();
 
   const twelveMo = p.projections.find(x => x.months === 12);
-  const threeMo = p.projections.find(x => x.months === 3);
   if (twelveMo && twelveMo.progressPct > 0) {
     insights.push(`At your current consistency, ${ex.name} is projected to gain ~${twelveMo.progressPct}% estimated strength over the next year.`);
   }
@@ -1426,9 +1447,6 @@ function generatePredictionInsights(ex) {
     }
   } else if (p.consistency >= 0.95) {
     insights.push(`You're training ${ex.name} right on pace — that consistency is a bigger driver of this projection than the growth rate itself.`);
-  }
-  if (ex.mode === 'weighted' && threeMo && threeMo.atCeiling) {
-    insights.push(`${ex.name} is projected to hit your equipment ceiling (${WEIGHTS[WEIGHTS.length-1]} lb) within 3 months — future gains there will need higher reps or slower tempo, not heavier dumbbells.`);
   }
   if (p.trend.r2 < 0.35 && p.trend.n >= 5) {
     insights.push(`${ex.name}'s recent numbers are fairly noisy session-to-session, so treat these projections as a rough direction rather than a precise date.`);
@@ -1862,7 +1880,7 @@ function getExerciseById(exId) {
 // duplicated objects for rendering/ordering purposes. Rest times are
 // deliberately left per-day — resting longer between sets on a heavier day is
 // a legitimate difference, not drift.
-const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'failThreshold', 'notes', 'progressReps', 'progressSets', 'progressWeight', 'repIncrement', 'beltIncrement', 'timeIncrement'];
+const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'startWeight', 'failThreshold', 'notes', 'progressReps', 'progressSets', 'progressWeight', 'repIncrement', 'beltIncrement', 'timeIncrement', 'weightIncrement'];
 
 function getLinkedCopies(exId) {
   const copies = [];
@@ -1938,6 +1956,28 @@ function adjustWeightLive(exId, direction) {
   if (!result.ok) { alert(result.reason); return; }
   saveState();
   if (navigator.vibrate) navigator.vibrate(15);
+  render();
+}
+
+// Tapping the weight value itself (rather than +/- stepping one increment
+// at a time) lets you jump straight to an exact number — e.g. the gym only
+// has this one plate combo today, or your home dumbbells don't match the
+// app's increment. This writes to the same progression state adjustWeight
+// does, so it's not a "just this once" override: it becomes the baseline
+// future sessions progress from, same as every other progression edit in
+// the app (there's no separate "today only" layer anywhere else either).
+function editWeightLive(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  const mode = getExerciseMode(ex);
+  if (!mode.hasWeightControl || !mode.setWeight) return;
+  const s = getExState(ex);
+  const input = prompt(`Set weight for "${ex.name}" — currently ${mode.weightLabel(ex, s)}.\nEnter any number (this becomes your new default going forward):`, s.weight ?? s.addedWeight ?? 0);
+  if (input === null) return;
+  const n = parseFloat(input);
+  if (isNaN(n) || n < 0) { alert('Enter a valid non-negative number.'); return; }
+  mode.setWeight(ex, s, n);
+  saveState();
   render();
 }
 
@@ -2770,7 +2810,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
     ? `<div class="livectrl">
         <span class="livectrl-label">Weight</span>
         <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', -1)">−</button>
-        <span class="livectrl-val">${exMode.weightLabel(ex, s)}</span>
+        <span class="livectrl-val" onclick="editWeightLive('${ex.id}')" style="cursor:pointer; text-decoration:underline dotted; text-underline-offset:3px;" title="Tap to type an exact weight">${exMode.weightLabel(ex, s)}</span>
         <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', 1)">+</button>
       </div>` : '';
 
@@ -2974,12 +3014,12 @@ function getMuscleGroupDurationStats(dayLabel) {
   if (currentIsIncomplete && !currentHasOverride) {
     sessions = sessions.filter(s => !(s.dateKey === curAnchor && s.sessionNum === curSessionNum));
   }
+  // Use the exact same duration function as the completion modal and the
+  // duration-edit screen (override, else sessionStart-aware span) — this
+  // used to reimplement its own span calc from raw entry timestamps only,
+  // which skipped sessionStart and so under-counted vs. what the modal shows.
   const durationsWithDate = sessions.map(({dateKey, sessionNum}) => {
-    const override = getDurationOverride(dateKey, dayLabel, sessionNum);
-    if (override != null) return { date: dateKey, mins: override };
-    const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
-    if (entries.length < 2) return null;
-    const mins = computeSessionSpanMinutes(entries.map(h => new Date(h.date).getTime()));
+    const mins = getSessionDuration(dateKey, dayLabel, sessionNum);
     return mins == null ? null : { date: dateKey, mins };
   }).filter(d => d != null);
   if (durationsWithDate.length === 0) return null;
@@ -3037,13 +3077,9 @@ function getRecentAvgDuration(dayLabel, n = 3) {
     sessions = sessions.filter(s => !(s.dateKey === curAnchor && s.sessionNum === curSessionNum));
   }
   sessions = sessions.slice(-n);
-  const durations = sessions.map(({dateKey, sessionNum}) => {
-    const override = getDurationOverride(dateKey, dayLabel, sessionNum);
-    if (override != null) return override;
-    const entries = state.history.filter(h => getEntryDateKey(h) === dateKey && h.day === dayLabel && getEntrySessionNum(h) === sessionNum);
-    if (entries.length < 2) return null;
-    return computeSessionSpanMinutes(entries.map(h => new Date(h.date).getTime()));
-  }).filter(d => d != null);
+  // Same canonical duration source as the completion modal — see the note
+  // in getMuscleGroupDurationStats above.
+  const durations = sessions.map(({dateKey, sessionNum}) => getSessionDuration(dateKey, dayLabel, sessionNum)).filter(d => d != null);
   if (durations.length === 0) return null;
   return { mean: Math.round(durations.reduce((a,b) => a+b, 0) / durations.length), count: durations.length };
 }
@@ -3513,13 +3549,9 @@ function renderCharts() {
         ? `At current pace, ~${proj3.predictedE1rm} lb estimated 1RM projected in ~3 months.`
         : `Trend is flat/declining — keep logging for a better estimate.`;
     } else if (ex.mode === 'weighted') {
-      if (proj3.atCeiling) {
-        predictionMsg = `Already near your equipment ceiling (${WEIGHTS[WEIGHTS.length-1]} lb) — further gains need higher reps/tempo, not heavier dumbbells.`;
-      } else if (proj3.progressPct <= 0) {
-        predictionMsg = `Trend is flat/declining — no clear projection yet. Keep logging for a better estimate.`;
-      } else {
-        predictionMsg = `At current pace, ~${proj3.predictedWorkingWeight} lb projected in ~3 months.`;
-      }
+      predictionMsg = proj3.progressPct <= 0
+        ? `Trend is flat/declining — no clear projection yet. Keep logging for a better estimate.`
+        : `At current pace, ~${proj3.predictedWorkingWeight} lb projected in ~3 months.`;
     } else if (ex.mode === 'weighted_bw') {
       predictionMsg = proj3.progressPct > 0
         ? `At current pace, ~+${Math.max(0, proj3.predictedWorkingWeight - (proj3.currentWorkingWeight||0))} lb belt weight projected in ~3 months.`
@@ -3946,6 +3978,7 @@ function openExerciseEditor(exId) {
     </div>
     <label style="${lbl}">Rep increment (blank = auto)<input type="number" id="editExRepIncrement" placeholder="auto" value="${ex.repIncrement ?? ''}"></label>
     ${ex.mode === 'weighted_bw' ? `<label style="${lbl}">Belt increment (lb)<input type="number" id="editExBeltIncrement" value="${getBeltIncrement(ex)}"></label>` : ''}
+    ${ex.mode === 'weighted' ? `<label style="${lbl}">Weight increment per level-up (lb)<input type="number" id="editExWeightIncrement" min="1" value="${getWeightIncrement(ex)}"></label>` : ''}
     <div>
       <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
       <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="editExProgressReps" ${progressesReps(ex) ? 'checked' : ''}> Reps</label>
@@ -4029,6 +4062,12 @@ function openExerciseEditor(exId) {
       if (beltIncEl) {
         const beltIncV = parseInt(beltIncEl.value);
         if (!isNaN(beltIncV) && beltIncV >= 1) ex.beltIncrement = beltIncV;
+      }
+
+      const weightIncEl = overlay.querySelector('#editExWeightIncrement');
+      if (weightIncEl) {
+        const weightIncV = parseFloat(weightIncEl.value);
+        if (!isNaN(weightIncV) && weightIncV >= 1) ex.weightIncrement = weightIncV;
       }
 
       const newMin = parseInt(overlay.querySelector('#editExSetsMin').value);
@@ -4183,13 +4222,11 @@ function editExerciseProgress(exId) {
   const s = getExState(ex);
 
   if (ex.mode === 'weighted') {
-    const current = WEIGHTS[s.tier];
-    const input = prompt(`Current dumbbell weight: ${current} lb.\nEnter new weight (one of ${WEIGHTS.join(', ')}):`, current);
+    const input = prompt(`Current weight: ${s.weight} lb.\nEnter new weight (any number — increments by ${getWeightIncrement(ex)} lb during normal progression):`, s.weight);
     if (input === null) return;
-    const n = parseInt(input);
-    const idx = WEIGHTS.indexOf(n);
-    if (idx === -1) { alert(`Must be one of: ${WEIGHTS.join(', ')}`); return; }
-    s.tier = idx;
+    const n = parseFloat(input);
+    if (isNaN(n) || n < 0) { alert('Enter a valid non-negative number.'); return; }
+    s.weight = n;
     const reps = prompt(`Target reps to start at this weight (usually ${ex.repLow}):`, ex.repLow);
     if (reps !== null && !isNaN(parseInt(reps))) s.targetReps = Math.max(1, parseInt(reps));
     s.failStreak = 0;
@@ -4230,6 +4267,7 @@ function onManageModeChange() {
   document.getElementById('grpProgressOptions').style.display = (isWeighted || isBodyweight) ? 'block' : 'none';
   document.getElementById('progressWeightWrap').style.display = isWeighted ? 'inline-flex' : 'none';
   document.getElementById('grpBeltIncrement').style.display = (mode === 'weighted_bw') ? 'block' : 'none';
+  document.getElementById('grpStartWeight').style.display = (mode === 'weighted') ? 'block' : 'none';
   document.getElementById('grpStartReps').style.display = isBodyweight ? 'block' : 'none';
   document.getElementById('grpStartSeconds').style.display = (mode === 'timed') ? 'block' : 'none';
 }
@@ -4331,6 +4369,11 @@ function addExercise(dayIdx) {
     if (mode === 'weighted_bw') {
       const beltIncRaw = parseInt(document.getElementById('newExBeltIncrement').value);
       ex.beltIncrement = (!isNaN(beltIncRaw) && beltIncRaw >= 1) ? beltIncRaw : BELT_INCREMENT;
+    } else if (mode === 'weighted') {
+      const startWeightRaw = parseFloat(document.getElementById('newExStartWeight').value);
+      ex.startWeight = (!isNaN(startWeightRaw) && startWeightRaw >= 0) ? startWeightRaw : 11;
+      const weightIncRaw = parseFloat(document.getElementById('newExWeightIncrement').value);
+      ex.weightIncrement = (!isNaN(weightIncRaw) && weightIncRaw >= 1) ? weightIncRaw : 5;
     }
   } else if (mode === 'bodyweight') {
     ex.startReps = parseInt(document.getElementById('newExStartReps').value) || 5;
@@ -4493,6 +4536,10 @@ function renderManage() {
           <div style="margin-top:6px;">Rep increment (blank = auto): <input id="newExRepIncrement" type="number" placeholder="auto" style="width:60px;"></div>
         </div>
         <div id="grpBeltIncrement" style="display:none;">Belt increment (lb): <input id="newExBeltIncrement" type="number" value="${BELT_INCREMENT}" style="width:60px;"></div>
+        <div id="grpStartWeight" style="display:none;">
+          Starting weight (lb): <input id="newExStartWeight" type="number" value="11" style="width:60px;">
+          <div style="margin-top:6px;">Weight increment per level-up (lb): <input id="newExWeightIncrement" type="number" value="5" min="1" style="width:60px;"></div>
+        </div>
         <div id="grpProgressOptions" style="display:none;">
           <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
           <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressReps" checked> Reps</label>
