@@ -781,6 +781,144 @@ function persistDays() {
   saveState();
 }
 
+// ---------- WORKOUT PLANS (switch programs for a while, keep everything) ----------
+// A "plan" bundles everything that's specific to one program: its days/
+// exercises, progression state, history, PRs, and duration overrides.
+// Exactly one plan is "live" at a time, using the same top-level state
+// fields (state.customDays, state.exercises, state.history, state.prs,
+// state.durationOverrides) everything else in the app already reads from —
+// switching plans doesn't change how those are read anywhere else, it just
+// swaps what's in them, archiving the outgoing plan's data into
+// state.plans[id] and restoring the incoming plan's data from there. Reuses
+// the exact same "wholesale state replace" sequence as backup import
+// (hydrateDaysFromState + saveState + render) since this is really the same
+// kind of operation at a smaller scale.
+function getActivePlanName() {
+  return state.activePlanName || 'My Plan';
+}
+function renamePlan() {
+  const name = prompt('Plan name:', getActivePlanName());
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  state.activePlanName = trimmed;
+  saveState();
+  render();
+}
+function archiveActivePlanInto(planId) {
+  state.plans = state.plans || {};
+  state.plans[planId] = {
+    name: getActivePlanName(),
+    days: DAYS,
+    exercises: state.exercises,
+    history: state.history,
+    prs: state.prs || [],
+    durationOverrides: state.durationOverrides || {},
+    sessionStarts: state.sessionStarts || {},
+    longestStreak: (state.meta && state.meta.longestStreak) || 0,
+    archivedAt: new Date().toISOString(),
+  };
+}
+// Clears everything that's tied to "which plan/day am I looking at right
+// now" — the live days/exercises just changed out from under it, so any of
+// this pointing at the old plan's ids would be stale or wrong.
+function resetViewStateForPlanSwitch() {
+  currentDayIdx = 0;
+  progressDayIdx = 0;
+  progressExerciseId = null;
+  focusOverrideId = null;
+  redoUnlocked.clear();
+  liveSets = {};
+  view = 'workout';
+}
+function startNewPlan() {
+  showConfirm({
+    title: 'Start a new plan?',
+    message: `"${getActivePlanName()}" — all its days, exercises, and history — will be saved, and you can switch back to it anytime. You'll start the new plan from a blank slate (add your own days/exercises in Manage).`,
+    confirmLabel: 'Start New Plan',
+    onConfirm: () => {
+      const currentName = prompt('Name your current plan (so you can find it later):', getActivePlanName());
+      if (currentName === null) return;
+      state.activePlanName = currentName.trim() || getActivePlanName();
+      const archiveId = state.activePlanId || ('plan_' + Date.now());
+      archiveActivePlanInto(archiveId);
+
+      const newName = (prompt('Name your new plan:', 'New Plan') || 'New Plan').trim() || 'New Plan';
+      state.activePlanId = 'plan_' + Date.now();
+      state.activePlanName = newName;
+      // Seed with the built-in starter days/exercises (same as a fresh
+      // install gets) rather than an empty array — nothing else in the app
+      // has ever had to handle zero days (removeDay refuses to go below
+      // one), so this keeps the new plan in a state everything already
+      // knows how to render. Edit/remove/add days and exercises from here
+      // via the normal Manage tools to reshape it into the real new plan.
+      state.customDays = JSON.parse(JSON.stringify(DEFAULT_DAYS));
+      state.exercises = {};
+      state.history = [];
+      state.prs = [];
+      state.durationOverrides = {};
+      state.sessionStarts = {};
+      state.meta = state.meta || {};
+      state.meta.longestStreak = 0;
+      delete state.liveSets;
+
+      hydrateDaysFromState();
+      resetViewStateForPlanSwitch();
+      saveState();
+      render();
+      alert(`Switched to "${newName}" — it starts with a default template of days/exercises. Go to Manage to rename, remove, or add whatever you actually want for this plan.`);
+    }
+  });
+}
+function switchToPlan(planId) {
+  const target = (state.plans || {})[planId];
+  if (!target) return;
+  showConfirm({
+    title: `Switch to "${target.name}"?`,
+    message: `"${getActivePlanName()}" will be saved and you can switch back anytime. "${target.name}" — its days, exercises, and history — will be restored exactly as you left it.`,
+    confirmLabel: 'Switch',
+    onConfirm: () => {
+      const currentId = state.activePlanId || ('plan_' + Date.now());
+      archiveActivePlanInto(currentId);
+
+      state.activePlanId = planId;
+      state.activePlanName = target.name;
+      state.customDays = target.days;
+      state.exercises = target.exercises;
+      state.history = target.history;
+      state.prs = target.prs || [];
+      state.durationOverrides = target.durationOverrides || {};
+      state.sessionStarts = target.sessionStarts || {};
+      state.meta = state.meta || {};
+      state.meta.longestStreak = target.longestStreak || 0;
+      delete state.plans[planId]; // now live, not archived
+      delete state.liveSets;
+
+      hydrateDaysFromState();
+      resetViewStateForPlanSwitch();
+      saveState();
+      render();
+      alert(`Switched to "${target.name}".`);
+    }
+  });
+}
+function deleteArchivedPlan(planId) {
+  const target = (state.plans || {})[planId];
+  if (!target) return;
+  showConfirm({
+    title: `Delete "${target.name}"?`,
+    message: `This permanently deletes all its days, exercises, and history. This cannot be undone.`,
+    confirmLabel: 'Delete Forever',
+    danger: true,
+    requireText: target.name,
+    onConfirm: () => {
+      delete state.plans[planId];
+      saveState();
+      render();
+    }
+  });
+}
+
 function getSetsMin(ex) { return ex.setsMin ?? ex.sets; }
 function getSetsMax(ex) { return ex.setsMax ?? (ex.sets + 2); }
 function getRepIncrement(ex) { return ex.repIncrement ?? ((ex.repLow ?? 0) >= 8 ? 2 : 1); }
@@ -1690,7 +1828,7 @@ function persistLiveSets(exId) {
   }
   saveState();
 }
-(function restoreLiveSets() {
+function restoreLiveSets() {
   const today = dateStr(new Date());
   const saved = state.liveSets || {};
   let changed = false;
@@ -1704,7 +1842,8 @@ function persistLiveSets(exId) {
     }
   });
   if (changed) saveState();
-})();
+}
+restoreLiveSets();
 let recentlyChangedSet = null; // {exId, setIdx} — briefly highlights a set box after its value changes
 let changedFlashTimer = null;
 function flashSetChanged(exId, setIdx) {
@@ -4555,6 +4694,25 @@ function renderManage() {
 
   return `<div class="tabs">${dayTabs}</div>
   <main>
+    <div class="card">
+      <div class="row" style="align-items:center;">
+        <h3 style="margin:0;">📋 Workout Plan: ${escapeHtml(getActivePlanName())}</h3>
+        <span onclick="renamePlan()" style="cursor:pointer; font-size:16px; padding:2px 4px;" title="Rename this plan">✏️</span>
+      </div>
+      <div class="meta" style="margin-top:6px; margin-bottom:0;">Switching to a new plan keeps everything about this one — days, exercises, progression, and history — safely saved so you can switch back anytime. Nothing is deleted.</div>
+      <button class="btn small secondary" style="margin-top:10px;" onclick="startNewPlan()">+ Start a New Plan</button>
+      ${Object.keys(state.plans || {}).length ? `
+        <div class="meta" style="margin-top:14px; margin-bottom:4px;">Saved plans</div>
+        ${Object.entries(state.plans).map(([id, p]) => `
+          <div class="histitem row" style="align-items:center;">
+            <span>${escapeHtml(p.name)}<br><span class="meta" style="margin:0;">${(p.days||[]).length} day${(p.days||[]).length!==1?'s':''} · ${(p.history||[]).length} logged workout${(p.history||[]).length!==1?'s':''} · saved ${dateStr(p.archivedAt)}</span></span>
+            <span style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="btn small secondary" onclick="switchToPlan('${id}')">↩ Switch to This</button>
+              <button class="btn small secondary" onclick="deleteArchivedPlan('${id}')">🗑</button>
+            </span>
+          </div>`).join('')}
+      ` : ''}
+    </div>
     <div class="card">
       <h3>🎨 Appearance</h3>
       <div class="tabs" style="padding:0; background:transparent; margin-top:4px;">
