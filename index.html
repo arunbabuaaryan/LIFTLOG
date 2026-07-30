@@ -2095,6 +2095,82 @@ function startTimerFor(exId) {
   if (ex) startRestTimer(ex.rest);
 }
 
+// ---------- SUPERSETS ----------
+// A superset is 2+ exercises on the same day sharing a supersetGroup id,
+// meant to be done back-to-back with little/no rest between them, then a
+// normal rest before whatever's next. This is deliberately just a grouping +
+// a shorter rest — it doesn't auto-alternate sets or change navigation; you
+// still tap between exercises yourself, same as always.
+const SUPERSET_COLORS = ['#ffb020', '#20c9d6', '#c77dff', '#ff6b9d', '#6bcf7f'];
+// Groups are labeled by first-appearance order within the day rather than
+// stored — so removing a group never leaves a gap like "Superset C" with no
+// A or B.
+function getSupersetGroupsForDay(day) {
+  const order = [];
+  day.exercises.forEach(ex => {
+    if (ex.supersetGroup && !order.includes(ex.supersetGroup)) order.push(ex.supersetGroup);
+  });
+  return order; // index into this = label/color index
+}
+function getSupersetLabel(day, groupId) {
+  const idx = getSupersetGroupsForDay(day).indexOf(groupId);
+  return idx === -1 ? null : String.fromCharCode(65 + (idx % 26));
+}
+function getSupersetColor(day, groupId) {
+  const idx = getSupersetGroupsForDay(day).indexOf(groupId);
+  return idx === -1 ? SUPERSET_COLORS[0] : SUPERSET_COLORS[idx % SUPERSET_COLORS.length];
+}
+function getSupersetPartners(ex, day) {
+  if (!ex.supersetGroup) return [];
+  return day.exercises.filter(e => e.id !== ex.id && e.supersetGroup === ex.supersetGroup);
+}
+function hasUnfinishedSupersetPartner(ex, day) {
+  return getSupersetPartners(ex, day).some(e => !isDoneToday(e.name, day.label));
+}
+function addToSuperset(exIdA, exIdB, dayIdx) {
+  const day = DAYS[dayIdx];
+  const exA = day.exercises.find(e => e.id === exIdA);
+  const exB = day.exercises.find(e => e.id === exIdB);
+  if (!exA || !exB) return;
+  const groupId = exA.supersetGroup || exB.supersetGroup || ('ss_' + Date.now().toString(36));
+  exA.supersetGroup = groupId;
+  exB.supersetGroup = groupId;
+  if (exA.supersetRest == null) exA.supersetRest = 0;
+  if (exB.supersetRest == null) exB.supersetRest = 0;
+  // Move exB to sit directly after exA (or after the last existing member of
+  // the group) so the group renders adjacently without any special-cased
+  // non-adjacent grouping logic in the card renderer.
+  const members = day.exercises.filter(e => e.supersetGroup === groupId);
+  const lastMemberIdx = Math.max(...members.map(e => day.exercises.indexOf(e)));
+  const bIdx = day.exercises.indexOf(exB);
+  day.exercises.splice(bIdx, 1);
+  const insertAt = bIdx < lastMemberIdx ? lastMemberIdx : lastMemberIdx + 1;
+  day.exercises.splice(insertAt, 0, exB);
+  persistDays();
+  saveState();
+  render();
+}
+// If removing an exercise from a group leaves only one member, that's no
+// longer a superset — clear its group too rather than leaving a lone
+// "Superset A" badge with nothing to pair with.
+function cleanupSupersetAfterRemoval(day, groupId) {
+  if (!groupId) return;
+  const remaining = day.exercises.filter(e => e.supersetGroup === groupId);
+  if (remaining.length === 1) { remaining[0].supersetGroup = null; remaining[0].supersetRest = null; }
+}
+function removeFromSuperset(exId, dayIdx) {
+  const day = DAYS[dayIdx];
+  const ex = day.exercises.find(e => e.id === exId);
+  if (!ex || !ex.supersetGroup) return;
+  const groupId = ex.supersetGroup;
+  ex.supersetGroup = null;
+  ex.supersetRest = null;
+  cleanupSupersetAfterRemoval(day, groupId);
+  persistDays();
+  saveState();
+  render();
+}
+
 function matchSet1(exId) {
   const arr = liveSets[exId];
   if (!arr || arr.length === 0) return;
@@ -2373,7 +2449,11 @@ function finishExerciseConfirmed(ex) {
   render();
   const dayHasMoreToday = DAYS[currentDayIdx].exercises.some(e => !isDoneToday(e.name, DAYS[currentDayIdx].label));
   if (dayHasMoreToday) {
-    startRestTimer(ex.transitionRest ?? TRANSITION_REST_SECONDS); // rest before moving to the next exercise
+    const day = DAYS[currentDayIdx];
+    const restSeconds = hasUnfinishedSupersetPartner(ex, day)
+      ? (ex.supersetRest ?? 0) // short/no rest — moving straight to a superset partner
+      : (ex.transitionRest ?? TRANSITION_REST_SECONDS);
+    if (restSeconds > 0) startRestTimer(restSeconds);
   } else {
     // Every exercise in this group is done — the workout is complete.
     // Trigger the automatic local backup (if enabled) right here, before
@@ -3012,7 +3092,9 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
   if (doneToday && !redoUnlocked.has(ex.id)) {
     const logged = getTodayLoggedEntry(ex, day);
     const loggedLabel = logged ? formatLoggedEntry(logged) : targetLabel(ex);
-    return `<div class="card done-today card-locked" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
+    const ssColor = ex.supersetGroup ? getSupersetColor(day, ex.supersetGroup) : null;
+    return `<div class="card done-today card-locked" style="border-left:3px solid ${day.color};${ssColor ? ` border-top:3px solid ${ssColor};` : ''}" id="card-${ex.id}">
+      ${ssColor ? `<div class="focus-eyebrow" style="color:${ssColor};">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)}</div>` : ''}
       <div class="row">
         <h3>✅ ${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>
         <button class="btn small secondary" onclick="unlockExerciseForRedo('${ex.id}')">↻ Redo</button>
@@ -3061,7 +3143,10 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
         <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', 1)">+</button>
       </div>`;
 
-  return `<div class="card ${doneToday?'done-today':''} ${highlighted?'card-focus':''}" style="border-left:3px solid ${day.color};" id="card-${ex.id}">
+  const ssColor = ex.supersetGroup ? getSupersetColor(day, ex.supersetGroup) : null;
+  const ssPartners = ex.supersetGroup ? getSupersetPartners(ex, day) : [];
+  return `<div class="card ${doneToday?'done-today':''} ${highlighted?'card-focus':''}" style="border-left:3px solid ${day.color};${ssColor ? ` border-top:3px solid ${ssColor};` : ''}" id="card-${ex.id}">
+    ${ssColor ? `<div class="focus-eyebrow" style="color:${ssColor};">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)} — with ${ssPartners.map(p => escapeHtml(p.name)).join(', ')}</div>` : ''}
     ${highlighted ? `<div class="focus-eyebrow">Now training</div>` : ''}
     ${doneToday ? `<div class="focus-eyebrow" style="color:var(--danger);">Redo unlocked — this will add a second log entry</div>` : ''}
     <div class="row"><h3>${doneToday?'✅ ':''}${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>${badge}</div>
@@ -4198,7 +4283,9 @@ function removeExercise(dayIdx, exId) {
       message: `"${ex.name}" is also linked to ${otherLabel}. Removing it here only unlinks it from ${day.label} — its history and progress are kept and it'll keep progressing on ${otherLabel}.`,
       confirmLabel: 'Remove from this day',
       onConfirm: () => {
+        const groupId = ex.supersetGroup;
         day.exercises = day.exercises.filter(e => e.id !== exId);
+        cleanupSupersetAfterRemoval(day, groupId);
         persistDays();
         render();
       }
@@ -4211,7 +4298,9 @@ function removeExercise(dayIdx, exId) {
     confirmLabel: 'Remove',
     danger: true,
     onConfirm: () => {
+      const groupId = ex.supersetGroup;
       day.exercises = day.exercises.filter(e => e.id !== exId);
+      cleanupSupersetAfterRemoval(day, groupId);
       state.history = state.history.filter(h => h.exercise !== ex.name);
       if (state.prs) state.prs = state.prs.filter(p => p.exercise !== ex.name);
       if (state.exercises) delete state.exercises[ex.id];
@@ -4284,6 +4373,7 @@ function openExerciseEditor(exId, dayIdx) {
           <label style="${lbl}">Rest between sets (s)<input type="number" id="editExRestBetween" value="${ex.rest}"></label>
           <label style="${lbl}">Rest after exercise (s)<input type="number" id="editExRestAfter" value="${ex.transitionRest ?? TRANSITION_REST_SECONDS}"></label>
         </div>
+        ${ex.supersetGroup ? `<label style="${lbl}">Rest before next superset exercise (s)<input type="number" id="editExSupersetRest" min="0" value="${ex.supersetRest ?? 0}"></label>` : ''}
         <label style="${lbl}">Deload after this many misses in a row<input type="number" id="editExFailThreshold" min="1" value="${getFailThreshold(ex)}"></label>
         <label style="${lbl}">Notes / cues (optional)<textarea id="editExNotes" rows="2" style="width:100%; resize:vertical; font-family:inherit; padding:10px; border-radius:8px; background:var(--surface-raised); border:1px solid var(--border-strong); color:var(--text); font-size:14px; box-sizing:border-box; font-weight:400;">${escapeHtml(ex.notes || '')}</textarea></label>
       </div>
@@ -4397,6 +4487,12 @@ function openExerciseEditor(exId, dayIdx) {
     const restAfterV = parseInt(overlay.querySelector('#editExRestAfter').value);
     if (!isNaN(restBetweenV) && restBetweenV > 0) ex.rest = restBetweenV;
     if (!isNaN(restAfterV) && restAfterV >= 0) ex.transitionRest = restAfterV;
+
+    const ssRestEl = overlay.querySelector('#editExSupersetRest');
+    if (ssRestEl) {
+      const ssRestV = parseInt(ssRestEl.value);
+      if (!isNaN(ssRestV) && ssRestV >= 0) ex.supersetRest = ssRestV;
+    }
 
     const threshV = parseInt(overlay.querySelector('#editExFailThreshold').value);
     if (!isNaN(threshV) && threshV >= 1) ex.failThreshold = threshV;
@@ -4604,6 +4700,37 @@ function filterLinkExerciseList() {
   });
 }
 
+function openSupersetPicker(exId, dayIdx) {
+  const day = DAYS[dayIdx];
+  const source = day.exercises.find(e => e.id === exId);
+  if (!source) return;
+  // Exclude the exercise itself and anything already in a *different*
+  // superset group — picking one of those would need to merge two groups,
+  // which adds complexity for a rare case; pick an ungrouped exercise
+  // instead (or unpair the other one first).
+  const available = day.exercises.filter(e => e.id !== exId && (!e.supersetGroup || e.supersetGroup === source.supersetGroup));
+
+  const rowHtml = (ex) => `<div class="histitem row" data-exname="${escapeHtml(ex.name.toLowerCase())}">
+      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span></span>
+      <button class="btn small" onclick="addToSuperset('${exId}', '${ex.id}', ${dayIdx}); document.getElementById('supersetOverlay').remove();">+ Pair</button>
+    </div>`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'supersetOverlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal" style="max-width:400px; max-height:85vh; overflow-y:auto;">
+      <h3>⚡ Superset ${escapeHtml(source.name)} with...</h3>
+      <div class="meta">Groups exercises to do back-to-back with little/no rest between them, then a normal rest before whatever's next. You still tap between them yourself — this just marks them visually and shortens the rest in between.</div>
+      <div>${available.length ? available.map(rowHtml).join('') : `<div class="empty">No other exercises on ${escapeHtml(day.label)} to pair with yet.</div>`}</div>
+      <div class="row" style="margin-top:16px;">
+        <button class="btn secondary" style="width:100%;" onclick="document.getElementById('supersetOverlay').remove()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
 function addExercise(dayIdx) {
   const name = document.getElementById('newExName').value.trim();
   const mode = document.getElementById('newExMode').value;
@@ -4683,12 +4810,15 @@ function renderManage() {
 
   const exList = day.exercises.map((ex, i) => `
     <div class="histitem row">
-      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span>${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')} — rest times below are independent per day; other settings stay in sync">🔗 linked</span>` : ''}</span>
+      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span>${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')} — rest times below are independent per day; other settings stay in sync">🔗 linked</span>` : ''}${ex.supersetGroup ? ` <span class="badge" style="background:${getSupersetColor(day, ex.supersetGroup)}; color:#1a1a1a;">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)}</span>` : ''}</span>
       <span style="display:flex; gap:6px; flex-wrap:wrap;">
         <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
         <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, 1)" ${i===day.exercises.length-1?'disabled style="opacity:.35;"':''}>↓</button>
         <button class="btn small secondary" onclick="openExerciseEditor('${ex.id}', ${currentDayIdx})">✏️ Edit</button>
         <button class="btn small secondary" onclick="editExerciseProgress('${ex.id}')">📈 Progress</button>
+        ${ex.supersetGroup
+          ? `<button class="btn small secondary" onclick="removeFromSuperset('${ex.id}', ${currentDayIdx})">⚡ Unpair</button>`
+          : `<button class="btn small secondary" onclick="openSupersetPicker('${ex.id}', ${currentDayIdx})">⚡ Superset</button>`}
         <button class="btn small secondary" onclick="removeExercise(${currentDayIdx}, '${ex.id}')">🗑 Remove</button>
       </span>
     </div>`).join('') || `<div class="empty">No exercises on this day.</div>`;
