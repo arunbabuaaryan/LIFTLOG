@@ -2970,6 +2970,7 @@ function render() {
   if (view === 'workout') app.innerHTML = renderWorkout();
   else if (view === 'progress') app.innerHTML = renderProgress();
   else if (view === 'manage') app.innerHTML = renderManage();
+  else if (view === 'settings') app.innerHTML = renderSettings();
   else app.innerHTML = renderHistory();
 
   if (view === 'progress') { setTimeout(renderCharts, 0); setTimeout(renderDurationRadarChart, 0); }
@@ -4694,6 +4695,80 @@ function renderManage() {
 
   return `<div class="tabs">${dayTabs}</div>
   <main>
+    <div class="card" style="cursor:pointer;" onclick="setView('settings')">
+      <div class="row" style="align-items:center;">
+        <h3 style="margin:0;">⚙️ App Settings</h3>
+        <span class="meta" style="margin:0;">Plan, appearance, timers, and more →</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row"><h3>Manage Days</h3><button class="btn small" onclick="addDay()">+ Add Day</button></div>
+      ${DAYS.map((d,i) => `
+        <div class="histitem row">
+          <span>${d.icon} ${escapeHtml(d.label)} <span class="badge">${d.exercises.length} exercises</span></span>
+          <span style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn small secondary" onclick="moveDay(${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
+            <button class="btn small secondary" onclick="moveDay(${i}, 1)" ${i===DAYS.length-1?'disabled style="opacity:.35;"':''}>↓</button>
+            <button class="btn small secondary" onclick="renameDay(${i})">✏️ Rename</button>
+            <button class="btn small secondary" onclick="removeDay(${i})">🗑 Delete</button>
+          </span>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <h3>Exercises — ${escapeHtml(day.label)}</h3>
+      ${exList}
+      <button class="btn small secondary" style="margin-top:10px;" onclick="openLinkExercisePicker(${currentDayIdx})">🔗 Link Existing Exercise</button>
+    </div>
+    <div class="card">
+      <h3>+ Add Exercise to ${escapeHtml(day.label)}</h3>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <input id="newExName" type="text" placeholder="Exercise name">
+        <select id="newExMode" onchange="onManageModeChange()">
+          <option value="weighted">Weighted (dumbbell double progression)</option>
+          <option value="weighted_bw">Weighted bodyweight (belt, e.g. pull-ups)</option>
+          <option value="bodyweight">Bodyweight only (reps)</option>
+          <option value="timed">Timed hold (e.g. plank)</option>
+        </select>
+        <div>Sets: <input id="newExSets" type="number" value="3" style="width:60px;"></div>
+        <div>Rest (seconds): <input id="newExRest" type="number" value="90" style="width:70px;"></div>
+        <div id="grpRepRange">
+          Rep range: <input id="newExRepLow" type="number" value="8" style="width:50px;"> to
+          <input id="newExRepHigh" type="number" value="12" style="width:50px;">
+          <div style="margin-top:6px;">Rep increment (blank = auto): <input id="newExRepIncrement" type="number" placeholder="auto" style="width:60px;"></div>
+        </div>
+        <div id="grpBeltIncrement" style="display:none;">Belt increment (lb): <input id="newExBeltIncrement" type="number" value="${BELT_INCREMENT}" style="width:60px;"></div>
+        <div id="grpStartWeight" style="display:none;">
+          Starting weight (lb): <input id="newExStartWeight" type="number" value="11" style="width:60px;">
+          <div style="margin-top:6px;">Weight increment per level-up (lb): <input id="newExWeightIncrement" type="number" value="5" min="1" style="width:60px;"></div>
+        </div>
+        <div id="grpProgressOptions" style="display:none;">
+          <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
+          <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressReps" checked> Reps</label>
+          <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressSets" checked> Sets</label>
+          <label id="progressWeightWrap" style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="newExProgressWeight" checked> Weight</label>
+        </div>
+        <div id="grpStartReps" style="display:none;">
+          Starting reps: <input id="newExStartReps" type="number" value="5" style="width:50px;">
+          <div style="margin-top:6px;">Rep ceiling (blank = uncapped): <input id="newExBwRepHigh" type="number" placeholder="uncapped" style="width:70px;"></div>
+          <div style="margin-top:6px;">Rep increment (blank = auto, +1/session): <input id="newExRepIncrementBw" type="number" placeholder="auto" style="width:60px;"></div>
+          <div class="meta" style="margin:4px 0 0;">Leave rep ceiling blank to keep reps climbing forever. Set it so reps cap out and sets take over — increase "Sets" above for headroom.</div>
+        </div>
+        <div id="grpStartSeconds" style="display:none;">
+          Starting seconds: <input id="newExStartSeconds" type="number" value="30" style="width:60px;">
+          <div style="margin-top:6px;">Time increment per progression/deload (sec): <input id="newExTimeIncrement" type="number" value="10" min="1" style="width:60px;"></div>
+        </div>
+        <button class="btn" onclick="addExercise(${currentDayIdx})">Add Exercise</button>
+      </div>
+    </div>
+  </main>`;
+}
+
+function renderSettings() {
+  return `<main>
+    <div class="row" style="align-items:center; margin-bottom:2px;">
+      <button class="btn small secondary" onclick="setView('manage')">← Back</button>
+      <h3 style="margin:0;">⚙️ App Settings</h3>
+    </div>
     <div class="card">
       <div class="row" style="align-items:center;">
         <h3 style="margin:0;">📋 Workout Plan: ${escapeHtml(getActivePlanName())}</h3>
@@ -4790,65 +4865,6 @@ function renderManage() {
         ${getTimerFlashEnabled() ? '<button class="btn small secondary" onclick="previewTimerFlash()">▶ Test flash</button>' : ''}
       </div>
       <div class="meta" style="margin-top:10px; margin-bottom:0;">Applies to the rest and hold (plank-style) timers. The extra alerts (flash, speech) are off by default — turn on whichever fit a quiet gym or a phone that's out of sight.</div>
-    </div>
-    <div class="card">
-      <div class="row"><h3>Manage Days</h3><button class="btn small" onclick="addDay()">+ Add Day</button></div>
-      ${DAYS.map((d,i) => `
-        <div class="histitem row">
-          <span>${d.icon} ${escapeHtml(d.label)} <span class="badge">${d.exercises.length} exercises</span></span>
-          <span style="display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn small secondary" onclick="moveDay(${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
-            <button class="btn small secondary" onclick="moveDay(${i}, 1)" ${i===DAYS.length-1?'disabled style="opacity:.35;"':''}>↓</button>
-            <button class="btn small secondary" onclick="renameDay(${i})">✏️ Rename</button>
-            <button class="btn small secondary" onclick="removeDay(${i})">🗑 Delete</button>
-          </span>
-        </div>`).join('')}
-    </div>
-    <div class="card">
-      <h3>Exercises — ${escapeHtml(day.label)}</h3>
-      ${exList}
-      <button class="btn small secondary" style="margin-top:10px;" onclick="openLinkExercisePicker(${currentDayIdx})">🔗 Link Existing Exercise</button>
-    </div>
-    <div class="card">
-      <h3>+ Add Exercise to ${escapeHtml(day.label)}</h3>
-      <div style="display:flex; flex-direction:column; gap:10px;">
-        <input id="newExName" type="text" placeholder="Exercise name">
-        <select id="newExMode" onchange="onManageModeChange()">
-          <option value="weighted">Weighted (dumbbell double progression)</option>
-          <option value="weighted_bw">Weighted bodyweight (belt, e.g. pull-ups)</option>
-          <option value="bodyweight">Bodyweight only (reps)</option>
-          <option value="timed">Timed hold (e.g. plank)</option>
-        </select>
-        <div>Sets: <input id="newExSets" type="number" value="3" style="width:60px;"></div>
-        <div>Rest (seconds): <input id="newExRest" type="number" value="90" style="width:70px;"></div>
-        <div id="grpRepRange">
-          Rep range: <input id="newExRepLow" type="number" value="8" style="width:50px;"> to
-          <input id="newExRepHigh" type="number" value="12" style="width:50px;">
-          <div style="margin-top:6px;">Rep increment (blank = auto): <input id="newExRepIncrement" type="number" placeholder="auto" style="width:60px;"></div>
-        </div>
-        <div id="grpBeltIncrement" style="display:none;">Belt increment (lb): <input id="newExBeltIncrement" type="number" value="${BELT_INCREMENT}" style="width:60px;"></div>
-        <div id="grpStartWeight" style="display:none;">
-          Starting weight (lb): <input id="newExStartWeight" type="number" value="11" style="width:60px;">
-          <div style="margin-top:6px;">Weight increment per level-up (lb): <input id="newExWeightIncrement" type="number" value="5" min="1" style="width:60px;"></div>
-        </div>
-        <div id="grpProgressOptions" style="display:none;">
-          <div class="meta" style="margin:0 0 4px;">What progresses? (pick at least one)</div>
-          <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressReps" checked> Reps</label>
-          <label style="display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:13px;"><input type="checkbox" id="newExProgressSets" checked> Sets</label>
-          <label id="progressWeightWrap" style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="newExProgressWeight" checked> Weight</label>
-        </div>
-        <div id="grpStartReps" style="display:none;">
-          Starting reps: <input id="newExStartReps" type="number" value="5" style="width:50px;">
-          <div style="margin-top:6px;">Rep ceiling (blank = uncapped): <input id="newExBwRepHigh" type="number" placeholder="uncapped" style="width:70px;"></div>
-          <div style="margin-top:6px;">Rep increment (blank = auto, +1/session): <input id="newExRepIncrementBw" type="number" placeholder="auto" style="width:60px;"></div>
-          <div class="meta" style="margin:4px 0 0;">Leave rep ceiling blank to keep reps climbing forever. Set it so reps cap out and sets take over — increase "Sets" above for headroom.</div>
-        </div>
-        <div id="grpStartSeconds" style="display:none;">
-          Starting seconds: <input id="newExStartSeconds" type="number" value="30" style="width:60px;">
-          <div style="margin-top:6px;">Time increment per progression/deload (sec): <input id="newExTimeIncrement" type="number" value="10" min="1" style="width:60px;"></div>
-        </div>
-        <button class="btn" onclick="addExercise(${currentDayIdx})">Add Exercise</button>
-      </div>
     </div>
     <div class="card" style="border-color:rgba(200,140,30,.45);">
       <h3 style="color:#ffcb4a;">🧪 Test Mode</h3>
