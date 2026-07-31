@@ -3,13 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <script>
-  // Applied before first paint so a saved "light" preference doesn't flash dark first.
-  // No stored preference (or "dark") leaves the <html> element as-is, which is the
-  // default dark theme defined in :root below.
+  // Applied before first paint so a saved theme preference doesn't flash the
+  // default dark theme first. "dark" (or nothing saved) leaves the <html>
+  // element as-is, which is the default dark theme defined in :root below.
   try {
-    if (localStorage.getItem('liftlog_theme') === 'light') {
-      document.documentElement.setAttribute('data-theme', 'light');
-    }
+    const t = localStorage.getItem('liftlog_theme');
+    if (t && t !== 'dark') document.documentElement.setAttribute('data-theme', t);
   } catch (e) {}
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -77,6 +76,64 @@
     --streak-color: #a8712e;
     --ring-track: #ececef;
     color-scheme: light;
+  }
+  /* AMOLED Black — true #000 background (real battery savings on OLED
+     screens) with a slightly brighter accent so it still pops against pure
+     black instead of looking washed out. */
+  [data-theme="black"] {
+    --bg: #000000;
+    --surface: #000000;
+    --surface-raised: #0d0d0d;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --text: #f2f3f6;
+    --text-dim: #8b90a3;
+    --text-faint: #55596b;
+    --accent: #6f8fff;
+    --success: #34d399;
+    --success-bg: #0d1f16;
+    --success-glow: rgba(52,211,153,.55);
+    --success-border: rgba(52,211,153,.4);
+    --danger: #f2555a;
+    --danger-bg: #1a0d0e;
+    --header-grad-a: #000000;
+    --header-grad-b: #000000;
+    --control-bg: #131313;
+    --control-bg-active: #1c1c1c;
+    --done-bg: #1f4a30;
+    --card-shadow: 0 1px 2px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.4);
+    --streak-color: #ffa361;
+    --ring-track: #1a1a1a;
+    color-scheme: dark;
+  }
+  /* High Contrast — max legibility: pure black/white text, thicker borders,
+     a bright yellow accent. For low-light gyms, glare, or just a preference
+     for punchier UI over subtle shading. */
+  [data-theme="contrast"] {
+    --bg: #000000;
+    --surface: #0a0a0a;
+    --surface-raised: #141414;
+    --border: rgba(255,255,255,0.25);
+    --border-strong: rgba(255,255,255,0.45);
+    --text: #ffffff;
+    --text-dim: #d5d5d5;
+    --text-faint: #a3a3a3;
+    --accent: #ffd60a;
+    --success: #00e676;
+    --success-bg: #002b12;
+    --success-glow: rgba(0,230,118,.6);
+    --success-border: rgba(0,230,118,.6);
+    --danger: #ff453a;
+    --danger-bg: #2b0805;
+    --header-grad-a: #000000;
+    --header-grad-b: #000000;
+    --control-bg: #1a1a1a;
+    --control-bg-active: #272727;
+    --done-bg: #0a4020;
+    --card-shadow: 0 0 0 1px rgba(255,255,255,.25);
+    --streak-color: #ffd60a;
+    --ring-track: #272727;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
@@ -621,15 +678,25 @@ function runMigrations(state, days) {
 function isTestMode() { return localStorage.getItem(TEST_MODE_FLAG) === '1'; }
 function activeStoreKey() { return isTestMode() ? TEST_STORE_KEY : STORE_KEY; }
 
-// ---------- APPEARANCE (dark default, light opt-in) ----------
-function getTheme() { return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'; }
+// ---------- APPEARANCE (dark default, others opt-in) ----------
+const THEMES = {
+  dark:     { name: 'Dark',          icon: '🌙', metaColor: '#111827' },
+  light:    { name: 'Light',         icon: '☀️', metaColor: '#ffffff' },
+  black:    { name: 'AMOLED Black',  icon: '⚫', metaColor: '#000000' },
+  contrast: { name: 'High Contrast', icon: '⚡', metaColor: '#000000' },
+};
+function getTheme() {
+  const t = localStorage.getItem(THEME_KEY);
+  return THEMES[t] ? t : 'dark';
+}
 function applyTheme(t) {
-  if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  if (t && t !== 'dark' && THEMES[t]) document.documentElement.setAttribute('data-theme', t);
   else document.documentElement.removeAttribute('data-theme');
   const metaTheme = document.querySelector('meta[name="theme-color"]');
-  if (metaTheme) metaTheme.setAttribute('content', t === 'light' ? '#ffffff' : '#111827');
+  if (metaTheme) metaTheme.setAttribute('content', (THEMES[t] || THEMES.dark).metaColor);
 }
 function setTheme(t) {
+  if (!THEMES[t]) return;
   localStorage.setItem(THEME_KEY, t);
   applyTheme(t);
   render();
@@ -2023,15 +2090,50 @@ function isDoneToday(exName, dayLabel) {
   return state.history.some(h => getEntryDateKey(h) === anchorDate && h.day === dayLabel && h.exercise === exName && getEntrySessionNum(h) === sessionNum);
 }
 
+// Native scrollIntoView({block:'center'}) centers against the full viewport,
+// with no idea that the sticky header, fixed bottom nav, and (when a timer's
+// running) the timer FAB all visually cover part of that viewport — so it
+// can happily "center" a card with its top half behind the header or its
+// bottom half behind the nav/FAB. This computes the actual visible area
+// between those fixed elements and centers within THAT instead. Falls back
+// to native scrollIntoView if anything's missing (shouldn't happen, but this
+// should never be the thing that breaks scrolling entirely).
+function scrollElementIntoSafeView(el) {
+  if (!el) return;
+  try {
+    const header = document.querySelector('header');
+    const nav = document.querySelector('.nav');
+    const fab = document.getElementById('timerFab');
+    const headerH = header ? header.getBoundingClientRect().height : 0;
+    const navH = nav ? nav.getBoundingClientRect().height : 0;
+    const fabShowing = fab && fab.style.display !== 'none' && fab.getBoundingClientRect().height > 0;
+    const fabH = fabShowing ? fab.getBoundingClientRect().height + 24 : 0; // + breathing room
+    const rect = el.getBoundingClientRect();
+    const safeTop = headerH + 10;
+    const safeBottom = window.innerHeight - navH - fabH - 10;
+    const safeHeight = safeBottom - safeTop;
+    if (safeHeight <= 0) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+    // Taller than the visible area — align to the top of it so at least the
+    // card's title/target (the important part) is visible, rather than
+    // centering and losing the top under the header.
+    const delta = rect.height >= safeHeight
+      ? rect.top - safeTop
+      : (rect.top + rect.height / 2) - (safeTop + safeHeight / 2);
+    window.scrollBy({ top: delta, behavior: 'smooth' });
+  } catch (e) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
 function scrollToNextIncomplete() {
   const day = DAYS[currentDayIdx];
   const next = day.exercises.find(ex => !isDoneToday(ex.name, day.label));
   if (next) {
     const el = document.getElementById(`card-${next.id}`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollElementIntoSafeView(el);
   } else {
     const banner = document.querySelector('.complete-banner');
-    if (banner) banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollElementIntoSafeView(banner);
   }
 }
 
@@ -2193,7 +2295,7 @@ function skipExercise(exId) {
       delete liveSets[exId];
       persistLiveSets(exId);
       render();
-      setTimeout(scrollToNextIncomplete, 100);
+      requestAnimationFrame(() => requestAnimationFrame(scrollToNextIncomplete));
     }
   });
 }
@@ -2469,7 +2571,7 @@ function finishExerciseConfirmed(ex) {
       setTimeout(() => showWorkoutCompleteModal(DAYS[currentDayIdx], mins, backedUp), WORKOUT_FLOW.autoAdvanceDelayMs);
     }
   }
-  setTimeout(scrollToNextIncomplete, 100);
+  requestAnimationFrame(() => requestAnimationFrame(scrollToNextIncomplete));
   if (leveledUp) {
     const el = document.getElementById(`card-${ex.id}`);
     if (el) {
@@ -3267,7 +3369,7 @@ function focusOnExercise(exId) {
   render();
   requestAnimationFrame(() => {
     const el = document.getElementById(`card-${exId}`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollElementIntoSafeView(el);
   });
 }
 
@@ -5183,11 +5285,12 @@ function renderSettings() {
     </div>
     <div class="card">
       <h3>🎨 Appearance</h3>
-      <div class="tabs" style="padding:0; background:transparent; margin-top:4px;">
-        <div class="tab" style="${getTheme()==='dark'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('dark')">🌙 Dark</div>
-        <div class="tab" style="${getTheme()==='light'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('light')">☀️ Light</div>
+      <div class="tabs" style="padding:0; background:transparent; margin-top:4px; flex-wrap:wrap;">
+        ${Object.entries(THEMES).map(([key, t]) =>
+          `<div class="tab" style="${getTheme()===key?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('${key}')">${t.icon} ${escapeHtml(t.name)}</div>`
+        ).join('')}
       </div>
-      <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean, professional look for daytime use.</div>
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean daytime look, AMOLED Black is true black for OLED screens, and High Contrast maximizes legibility with bold borders and a bright accent.</div>
     </div>
     <div class="card">
       <h3>🎯 Workout Flow</h3>
