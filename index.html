@@ -1961,24 +1961,10 @@ let timerInterval = null;
 
 const TRANSITION_REST_SECONDS = 60; // rest between finishing one exercise and starting the next
 
-// ---------- WAKE LOCK ----------
-let wakeLock = null;
-async function requestWakeLock() {
-  try {
-    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
-  } catch (e) { /* not supported or denied, fail silently */ }
-}
-function releaseWakeLock() {
-  if (wakeLock) { wakeLock.release().catch(()=>{}); wakeLock = null; }
-}
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && view === 'workout') requestWakeLock();
-});
-
 function setView(v) {
+  if (view === 'progress' && v !== 'progress') destroyProgressCharts();
   view = v;
   document.querySelectorAll('.navbtn').forEach(b => b.classList.toggle('active', b.dataset.view === v));
-  if (v === 'workout') requestWakeLock(); else releaseWakeLock();
   // Note: opening Manage/Settings deliberately does NOT touch Google Drive
   // in any way (no silent token refresh, no sync). Drive sync only ever
   // runs from the explicit "Sync now" button (manualDriveSyncNow), so
@@ -2240,15 +2226,18 @@ function addToSuperset(exIdA, exIdB, dayIdx) {
   exB.supersetGroup = groupId;
   if (exA.supersetRest == null) exA.supersetRest = 0;
   if (exB.supersetRest == null) exB.supersetRest = 0;
-  // Move exB to sit directly after exA (or after the last existing member of
-  // the group) so the group renders adjacently without any special-cased
-  // non-adjacent grouping logic in the card renderer.
-  const members = day.exercises.filter(e => e.supersetGroup === groupId);
-  const lastMemberIdx = Math.max(...members.map(e => day.exercises.indexOf(e)));
+  // Move exB to sit directly after the rest of the group, so the group
+  // renders adjacently without any special-cased non-adjacent grouping
+  // logic in the card renderer. exB is removed from the array FIRST, then
+  // the insert point is computed from the remaining group members —
+  // computing it beforehand (while exB still counted as "a member" at its
+  // own stale index) corrupted the target position in most arrangements
+  // where exB wasn't already immediately before exA.
   const bIdx = day.exercises.indexOf(exB);
   day.exercises.splice(bIdx, 1);
-  const insertAt = bIdx < lastMemberIdx ? lastMemberIdx : lastMemberIdx + 1;
-  day.exercises.splice(insertAt, 0, exB);
+  const others = day.exercises.filter(e => e.supersetGroup === groupId);
+  const lastOtherIdx = others.length ? Math.max(...others.map(e => day.exercises.indexOf(e))) : day.exercises.indexOf(exA);
+  day.exercises.splice(lastOtherIdx + 1, 0, exB);
   persistDays();
   saveState();
   render();
@@ -2280,7 +2269,8 @@ function matchSet1(exId) {
   const first = arr[0].value;
   for (let i = 1; i < arr.length; i++) arr[i].value = first;
   if (navigator.vibrate) navigator.vibrate(20);
-  render();
+  renderPreservingScroll();
+  persistLiveSets(exId);
 }
 
 function skipExercise(exId) {
@@ -2360,7 +2350,8 @@ function adjustSetsLive(exId, direction) {
   }
   saveState();
   if (navigator.vibrate) navigator.vibrate(15);
-  render();
+  renderPreservingScroll();
+  persistLiveSets(exId);
 }
 
 function startWorkoutNow() {
@@ -2419,7 +2410,7 @@ function markSetDone(exId, setIdx) {
     fab.style.display = 'none';
     fab.classList.remove('urgent');
   }
-  render();
+  renderPreservingScroll();
   persistLiveSets(exId);
 
   const allDone = arr.every(x => x.doneMark);
@@ -2440,7 +2431,7 @@ function startHoldZero(exId, setIdx) {
     arr[setIdx].value = 0;
     if (navigator.vibrate) navigator.vibrate([20,30,20]);
     flashSetChanged(exId, setIdx);
-    render();
+    renderPreservingScroll();
     persistLiveSets(exId);
   }, 450);
 }
@@ -2459,7 +2450,7 @@ function adjustSet(exId, setIdx, delta) {
   arr[setIdx].value = Math.max(0, arr[setIdx].value + delta);
   if (navigator.vibrate) navigator.vibrate(15);
   flashSetChanged(exId, setIdx);
-  render();
+  renderPreservingScroll();
   persistLiveSets(exId);
 }
 
@@ -2470,7 +2461,7 @@ function typeSet(exId, setIdx) {
   if (input === null) return;
   const n = parseInt(input);
   if (!isNaN(n)) { arr[setIdx].value = Math.max(0, n); flashSetChanged(exId, setIdx); }
-  render();
+  renderPreservingScroll();
   persistLiveSets(exId);
 }
 
@@ -2757,7 +2748,6 @@ function startRestTimer(seconds) {
   applyTimerModeClass();
   updateFab();
   showExtendBtn();
-  requestWakeLock();
   timerInterval = setInterval(tickTimer, 1000);
 }
 
@@ -2782,7 +2772,6 @@ function startHoldTimer(exId, setIdx) {
   applyTimerModeClass();
   updateFab();
   showExtendBtn();
-  requestWakeLock();
   vibratePattern(20);
   renderPreservingScroll();
   timerInterval = setInterval(tickTimer, 1000);
@@ -2803,7 +2792,7 @@ function tickTimer() {
     fab.style.display = 'none';
     fab.classList.remove('urgent');
     hideExtendBtn();
-    releaseWakeLock();
+    syncWorkoutWakeLock(); // NOT a blind release — the workout session itself may still be in progress
     finalAlarm();
     if (timerKind === 'hold') completeHoldSet(holdExId, holdSetIdx);
   } else {
@@ -2876,18 +2865,21 @@ function skipTimer() {
   fab.classList.remove('urgent');
   applyTimerModeClass();
   hideExtendBtn();
-  releaseWakeLock();
+  syncWorkoutWakeLock(); // NOT a blind release — skipping a rest timer doesn't mean the workout is over
 }
 
 // ---------- SCREEN WAKE LOCK ----------
-// Phones auto-lock mid-rest, which silently kills the visible countdown.
-// Requesting a screen wake lock while a timer is running keeps the display
-// on; it's released the moment the timer ends or is skipped so it doesn't
-// keep the screen awake outside of an active countdown. The Wake Lock API
-// needs no permission prompt but isn't universally supported (notably older
-// Safari), so this fails silently where it's unavailable — the app already
-// works fine without it, this just removes a common friction point where
-// it's supported.
+// Keeps the screen on for the whole span of an active workout — from the
+// first set you log today until the day is fully complete — not just during
+// rest/hold timers. Recomputed fresh on every render from actual state
+// (session started + not yet 100% done) rather than toggled imperatively
+// from scattered start/stop call sites, so it can't drift out of sync or
+// have one code path release a lock another part of the app still wants
+// held (e.g. a timer ending mid-workout used to kill the lock even though
+// the workout itself wasn't over). The Wake Lock API needs no permission
+// prompt but isn't universally supported (notably older Safari), so this
+// fails silently where it's unavailable — the app already works fine
+// without it, this just removes a common friction point where it's supported.
 let wakeLockObj = null;
 function getKeepScreenOnEnabled() {
   const v = localStorage.getItem('liftlog_keep_screen_on');
@@ -2895,11 +2887,11 @@ function getKeepScreenOnEnabled() {
 }
 function setKeepScreenOnEnabled(on) {
   localStorage.setItem('liftlog_keep_screen_on', on ? '1' : '0');
-  if (!on) releaseWakeLock(); else if (timerInterval) requestWakeLock();
+  syncWorkoutWakeLock();
   render();
 }
 async function requestWakeLock() {
-  if (!getKeepScreenOnEnabled() || !('wakeLock' in navigator)) return;
+  if (!getKeepScreenOnEnabled() || !('wakeLock' in navigator) || wakeLockObj) return;
   try {
     wakeLockObj = await navigator.wakeLock.request('screen');
   } catch(e) { wakeLockObj = null; }
@@ -2910,12 +2902,25 @@ function releaseWakeLock() {
     wakeLockObj = null;
   }
 }
+// The actual "should the screen be held on right now" decision: true from
+// the moment today's session for the current day started until that day
+// hits 100% complete. Call this any time something might have changed that —
+// finishing a set, skipping/redoing an exercise, switching days, toggling
+// the setting — rather than requesting/releasing directly from those places.
+function syncWorkoutWakeLock() {
+  const day = DAYS[currentDayIdx];
+  if (!day) { releaseWakeLock(); return; }
+  const { key } = getActiveSession(day.label);
+  const started = !!(state.sessionStarts && state.sessionStarts[key]);
+  const pct = getTodayCompletionPct(day);
+  if (started && pct < 100) requestWakeLock();
+  else releaseWakeLock();
+}
 // The wake lock is auto-released by the browser whenever the tab goes into
-// the background, so it needs to be re-requested on return if a timer is
-// still counting down (the interval itself keeps running in the
-// background — this only restores the screen-on behavior).
+// the background, so it needs to be re-requested on return if a workout is
+// still in progress.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && timerInterval) requestWakeLock();
+  if (document.visibilityState === 'visible') syncWorkoutWakeLock();
 });
 
 // Timer sound/vibration are separate per-device toggles (like theme/focus
@@ -3159,6 +3164,7 @@ function render() {
 
     if (view === 'progress') { setTimeout(renderCharts, 0); setTimeout(renderDurationRadarChart, 0); setTimeout(renderBodyweightChart, 0); }
     requestAnimationFrame(scrollActiveTabsIntoView);
+    syncWorkoutWakeLock();
   } catch (err) {
     console.error('LiftLog render error:', err);
     renderErrorFallback(app, err);
@@ -4106,6 +4112,16 @@ function renderPredictionSettingsPanel() {
 }
 
 let chartRef = null;
+// Called when navigating away from Progress — the canvases these are
+// attached to get removed from the DOM by the next view's innerHTML swap,
+// but Chart.js instances aren't cleaned up automatically just because their
+// canvas is gone, so without this each Progress visit leaked one more
+// detached Chart.js instance still listening for resize events etc.
+function destroyProgressCharts() {
+  if (chartRef) { chartRef.destroy(); chartRef = null; }
+  if (durationRadarRef) { durationRadarRef.destroy(); durationRadarRef = null; }
+  if (bodyweightChartRef) { bodyweightChartRef.destroy(); bodyweightChartRef = null; }
+}
 function renderCharts() {
   const ex = getExerciseById(progressExerciseId);
   const predEl = document.getElementById('predictionText');
@@ -4469,11 +4485,18 @@ function resetAllData() {
     onConfirm: () => {
       const keepDays = DAYS;
       const keepDriveSync = state.driveSync;
-      state = { version: SCHEMA_VERSION, exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays, driveSync: keepDriveSync };
+      const keepBodyweightLog = state.bodyweightLog;
+      const keepPlans = state.plans;
+      const keepActivePlanId = state.activePlanId;
+      const keepActivePlanName = state.activePlanName;
+      state = {
+        version: SCHEMA_VERSION, exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays, driveSync: keepDriveSync,
+        bodyweightLog: keepBodyweightLog, plans: keepPlans, activePlanId: keepActivePlanId, activePlanName: keepActivePlanName,
+      };
       saveState();
       liveSets = {};
       currentDayIdx = 0;
-      alert('All data reset. Exercise list and Drive connection were kept.');
+      alert('All data reset. Exercise list, bodyweight log, saved plans, and Drive connection were kept.');
       setView('workout');
     }
   });
@@ -5304,7 +5327,7 @@ function renderSettings() {
       <h3>⏱ Timer Alerts</h3>
       <label class="row" style="margin-top:8px; align-items:center; gap:8px; cursor:pointer;">
         <input type="checkbox" ${getKeepScreenOnEnabled() ? 'checked' : ''} onchange="setKeepScreenOnEnabled(this.checked)">
-        <span class="meta" style="margin:0;">Keep screen on while a timer is running</span>
+        <span class="meta" style="margin:0;">Keep screen on during your workout (from your first set to finishing the day)</span>
       </label>
       <label class="row" style="margin-top:8px; align-items:center; gap:8px; cursor:pointer;">
         <input type="checkbox" ${getTimerSoundEnabled() ? 'checked' : ''} onchange="setTimerSoundEnabled(this.checked)">
@@ -5798,7 +5821,6 @@ if (isTestMode()) {
   banner.textContent = '🧪 TEST MODE — changes here do NOT affect your real data';
 }
 render();
-requestWakeLock();
 
 // Extra safety net: closing the tab/PWA mid-set with unfinished progress is
 // an easy accident. Most mobile browsers won't show a custom dialog here,
