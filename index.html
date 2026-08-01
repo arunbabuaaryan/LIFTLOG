@@ -2081,10 +2081,22 @@ function isDoneToday(exName, dayLabel) {
 // running) the timer FAB all visually cover part of that viewport — so it
 // can happily "center" a card with its top half behind the header or its
 // bottom half behind the nav/FAB. This computes the actual visible area
-// between those fixed elements and centers within THAT instead. Falls back
-// to native scrollIntoView if anything's missing (shouldn't happen, but this
-// should never be the thing that breaks scrolling entirely).
-function scrollElementIntoSafeView(el) {
+// between those fixed elements and positions within THAT instead. Default
+// behavior top-aligns the element (so the whole tile is visible starting
+// right below the header) rather than centering it. Falls back to native
+// scrollIntoView if anything's missing (shouldn't happen, but this should
+// never be the thing that breaks scrolling entirely).
+//
+// opts.keepInUpperFraction + opts.focusSelector: for landing on the NEXT
+// exercise after finishing one — top-aligning the card is usually enough to
+// keep its sets-logging rows within comfortable one-handed thumb reach, but
+// a card with a lot of sets can be tall enough to push them further down
+// than that. If given, this checks where the focusSelector sub-element
+// (the sets rows) would actually land and, if its bottom would fall below
+// keepInUpperFraction of the safe area, re-anchors so that section's bottom
+// sits right at that line instead — prioritizing "all the sets are
+// reachable" over "the whole card, buttons and all, is visible".
+function scrollElementIntoSafeView(el, opts = {}) {
   if (!el) return;
   try {
     const header = document.querySelector('header');
@@ -2098,16 +2110,24 @@ function scrollElementIntoSafeView(el) {
     const safeTop = headerH + 10;
     const safeBottom = window.innerHeight - navH - fabH - 10;
     const safeHeight = safeBottom - safeTop;
-    if (safeHeight <= 0) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
-    // Taller than the visible area — align to the top of it so at least the
-    // card's title/target (the important part) is visible, rather than
-    // centering and losing the top under the header.
-    const delta = rect.height >= safeHeight
-      ? rect.top - safeTop
-      : (rect.top + rect.height / 2) - (safeTop + safeHeight / 2);
+    if (safeHeight <= 0) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+
+    let delta = rect.top - safeTop; // top-align by default
+
+    if (opts.keepInUpperFraction != null) {
+      const focusEl = opts.focusSelector ? el.querySelector(opts.focusSelector) : null;
+      if (focusEl) {
+        const focusRect = focusEl.getBoundingClientRect();
+        const projectedFocusBottom = focusRect.bottom - delta;
+        const limit = safeTop + safeHeight * opts.keepInUpperFraction;
+        if (projectedFocusBottom > limit) {
+          delta += (projectedFocusBottom - limit); // re-anchor so the sets rows' bottom lands at the limit
+        }
+      }
+    }
     window.scrollBy({ top: delta, behavior: 'smooth' });
   } catch (e) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
 
@@ -2116,7 +2136,11 @@ function scrollToNextIncomplete() {
   const next = day.exercises.find(ex => !isDoneToday(ex.name, day.label));
   if (next) {
     const el = document.getElementById(`card-${next.id}`);
-    scrollElementIntoSafeView(el);
+    // Only fires once the just-finished exercise's whole set is done (see
+    // finishExerciseConfirmed) — never mid-exercise while still logging
+    // individual sets, which uses renderPreservingScroll instead and
+    // deliberately doesn't move the screen at all.
+    scrollElementIntoSafeView(el, { keepInUpperFraction: 0.75, focusSelector: '.sets' });
   } else {
     const banner = document.querySelector('.complete-banner');
     scrollElementIntoSafeView(banner);
