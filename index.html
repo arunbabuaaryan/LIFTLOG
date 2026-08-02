@@ -291,7 +291,7 @@
   .livectrl { display: flex; align-items: center; gap: 6px; }
   .livectrl-label { font-size: 11px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
   .livectrl-val { font-size: 14px; font-weight: 700; min-width: 44px; text-align: center; color: var(--text); }
-  .sets { display: flex; gap: 8px; flex-wrap: wrap; }
+  .sets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .setbox {
     min-width: 156px; height: 56px; border-radius: 13px; background: var(--surface-raised);
     display: flex; align-items: center; justify-content: space-between; padding: 0 4px;
@@ -1818,7 +1818,16 @@ let chartRange = '90'; // 'all' | '90' | '30' (days) — defaults to most recent
 // rather than a hardcoded id list, so this works for both the Progress
 // view's fixed pcard-* cards and the Workout view's per-exercise
 // card-${ex.id} cards.
-function captureScrollAnchor() {
+function captureScrollAnchor(preferredId) {
+  // If the caller knows exactly which card it's about to touch, anchor to
+  // THAT card directly rather than guessing via "whichever card is nearest
+  // the header" — the heuristic below is a reasonable fallback for renders
+  // not tied to a specific card (chart/tab toggles), but for a live workout
+  // edit we already know exactly what shouldn't move.
+  if (preferredId) {
+    const el = document.getElementById(preferredId);
+    if (el) return { id: preferredId, offsetFromTop: el.getBoundingClientRect().top };
+  }
   const HEADER_BUFFER = 90; // roughly the height of the sticky header/tab bar
   const cards = document.querySelectorAll('#app .card[id]');
   let best = null;
@@ -1844,8 +1853,8 @@ function restoreScrollAnchor(anchor) {
   window.scrollTo(0, window.scrollY + delta);
 }
 
-function renderPreservingScroll() {
-  const anchor = captureScrollAnchor();
+function renderPreservingScroll(preferredAnchorId) {
+  const anchor = captureScrollAnchor(preferredAnchorId);
   render();
   restoreScrollAnchor(anchor);
 }
@@ -1955,7 +1964,7 @@ function undoFinishExercise() {
   liveSets[exId] = arr; // bring the tapped-in values back so nothing is lost
   lastFinishUndo = null;
   saveState();
-  render();
+  renderPreservingScroll(`card-${exId}`);
 }
 let timerInterval = null;
 
@@ -2131,9 +2140,25 @@ function scrollElementIntoSafeView(el, opts = {}) {
   }
 }
 
-function scrollToNextIncomplete() {
+function scrollToNextIncomplete(justFinishedEx) {
+  // Focus Mode deliberately shows one exercise at a time so scrolling is
+  // never required to reach it — the next exercise just replaces the
+  // current card in place. Running the scroll logic anyway here would work
+  // against that (and risks a small unwanted shift from the up-next
+  // preview / completed-count summary changing size when render swaps in
+  // the new active exercise).
+  if (getFocusMode()) return;
   const day = DAYS[currentDayIdx];
-  const next = day.exercises.find(ex => !isDoneToday(ex.name, day.label));
+  // If the exercise just finished is part of a superset and its partner
+  // isn't done yet, that partner is specifically where "continue the
+  // superset" means — not just whichever exercise happens to come first in
+  // the day's list (which could be a completely unrelated one if the
+  // superset pair isn't first in the array).
+  let next = null;
+  if (justFinishedEx && justFinishedEx.supersetGroup) {
+    next = getSupersetPartners(justFinishedEx, day).find(p => !isDoneToday(p.name, day.label));
+  }
+  if (!next) next = day.exercises.find(ex => !isDoneToday(ex.name, day.label));
   if (next) {
     const el = document.getElementById(`card-${next.id}`);
     // Only fires once the just-finished exercise's whole set is done (see
@@ -2293,7 +2318,7 @@ function matchSet1(exId) {
   const first = arr[0].value;
   for (let i = 1; i < arr.length; i++) arr[i].value = first;
   if (navigator.vibrate) navigator.vibrate(20);
-  renderPreservingScroll();
+  renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
 }
 
@@ -2308,8 +2333,8 @@ function skipExercise(exId) {
     onConfirm: () => {
       delete liveSets[exId];
       persistLiveSets(exId);
-      render();
-      requestAnimationFrame(() => requestAnimationFrame(scrollToNextIncomplete));
+      renderPreservingScroll(`card-${exId}`);
+      requestAnimationFrame(() => requestAnimationFrame(() => scrollToNextIncomplete(ex)));
     }
   });
 }
@@ -2324,7 +2349,7 @@ function adjustWeightLive(exId, direction) {
   if (!result.ok) { alert(result.reason); return; }
   saveState();
   if (navigator.vibrate) navigator.vibrate(15);
-  render();
+  renderPreservingScroll(`card-${exId}`);
 }
 
 // Tapping the weight value itself (rather than +/- stepping one increment
@@ -2346,7 +2371,7 @@ function editWeightLive(exId) {
   if (isNaN(n) || n < 0) { alert('Enter a valid non-negative number.'); return; }
   mode.setWeight(ex, s, n);
   saveState();
-  render();
+  renderPreservingScroll(`card-${exId}`);
 }
 
 function adjustSetsLive(exId, direction) {
@@ -2374,7 +2399,7 @@ function adjustSetsLive(exId, direction) {
   }
   saveState();
   if (navigator.vibrate) navigator.vibrate(15);
-  renderPreservingScroll();
+  renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
 }
 
@@ -2434,7 +2459,7 @@ function markSetDone(exId, setIdx) {
     fab.style.display = 'none';
     fab.classList.remove('urgent');
   }
-  renderPreservingScroll();
+  renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
 
   const allDone = arr.every(x => x.doneMark);
@@ -2455,7 +2480,7 @@ function startHoldZero(exId, setIdx) {
     arr[setIdx].value = 0;
     if (navigator.vibrate) navigator.vibrate([20,30,20]);
     flashSetChanged(exId, setIdx);
-    renderPreservingScroll();
+    renderPreservingScroll(`card-${exId}`);
     persistLiveSets(exId);
   }, 450);
 }
@@ -2474,7 +2499,7 @@ function adjustSet(exId, setIdx, delta) {
   arr[setIdx].value = Math.max(0, arr[setIdx].value + delta);
   if (navigator.vibrate) navigator.vibrate(15);
   flashSetChanged(exId, setIdx);
-  renderPreservingScroll();
+  renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
 }
 
@@ -2485,7 +2510,7 @@ function typeSet(exId, setIdx) {
   if (input === null) return;
   const n = parseInt(input);
   if (!isNaN(n)) { arr[setIdx].value = Math.max(0, n); flashSetChanged(exId, setIdx); }
-  renderPreservingScroll();
+  renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
 }
 
@@ -2564,7 +2589,7 @@ function finishExerciseConfirmed(ex) {
   persistLiveSets(ex.id);
   redoUnlocked.delete(ex.id); // back to locked/read-only after this log, even if this was a redo
   if (focusOverrideId === ex.id) focusOverrideId = null; // let focus mode auto-advance to the next incomplete exercise
-  render();
+  renderPreservingScroll(`card-${ex.id}`);
   const dayHasMoreToday = DAYS[currentDayIdx].exercises.some(e => !isDoneToday(e.name, DAYS[currentDayIdx].label));
   if (dayHasMoreToday) {
     const day = DAYS[currentDayIdx];
@@ -2586,7 +2611,7 @@ function finishExerciseConfirmed(ex) {
       setTimeout(() => showWorkoutCompleteModal(DAYS[currentDayIdx], mins, backedUp), WORKOUT_FLOW.autoAdvanceDelayMs);
     }
   }
-  requestAnimationFrame(() => requestAnimationFrame(scrollToNextIncomplete));
+  requestAnimationFrame(() => requestAnimationFrame(() => scrollToNextIncomplete(ex)));
   if (leveledUp) {
     const el = document.getElementById(`card-${ex.id}`);
     if (el) {
@@ -3372,7 +3397,7 @@ function unlockExerciseForRedo(exId) {
     message: `${ex ? ex.name : 'This exercise'} is already logged for today. Doing it again adds a SECOND entry — it'll count twice toward today's volume and duration. Only do this to fix a mistake.`,
     confirmLabel: 'Unlock to redo',
     danger: true,
-    onConfirm: () => { redoUnlocked.add(exId); render(); }
+    onConfirm: () => { redoUnlocked.add(exId); renderPreservingScroll(`card-${exId}`); }
   });
 }
 
@@ -4743,6 +4768,7 @@ function openExerciseEditor(exId, dayIdx) {
       <label style="display:inline-flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" id="editExProgressSets" ${progressesSets(ex) ? 'checked' : ''}> Sets</label>
     </div>
   ` : `
+    <label style="${lbl}">Sets<input type="number" id="editExSets" min="1" value="${ex.sets}"></label>
     <label style="${lbl}">Default starting hold time (seconds)<input type="number" id="editExStartSeconds" value="${ex.startSeconds}"></label>
     <label style="${lbl}">Time increment per progression/deload (sec)<input type="number" id="editExTimeIncrement" min="1" value="${getTimeIncrement(ex)}"></label>
   `;
@@ -4863,6 +4889,8 @@ function openExerciseEditor(exId, dayIdx) {
       const s2 = getExState(ex);
       if (ex.repHigh != null) s2.targetReps = Math.min(Math.max(s2.targetReps, ex.startReps), ex.repHigh);
     } else if (ex.mode === 'timed') {
+      const setsV = parseInt(overlay.querySelector('#editExSets').value);
+      if (!isNaN(setsV) && setsV >= 1) ex.sets = setsV;
       const secV = parseInt(overlay.querySelector('#editExStartSeconds').value);
       if (!isNaN(secV) && secV >= 1) ex.startSeconds = secV;
       const timeIncV = parseInt(overlay.querySelector('#editExTimeIncrement').value);
