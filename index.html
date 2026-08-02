@@ -1894,11 +1894,13 @@ function selectProgressDay(i) {
   progressDayIdx = i;
   progressExerciseId = null; // reset so it defaults to the first exercise of the new day
   renderPreservingScroll();
+  requestAnimationFrame(scrollActiveTabsIntoView);
 }
 
 function selectProgressExercise(exId) {
   progressExerciseId = exId;
   renderPreservingScroll();
+  requestAnimationFrame(scrollActiveTabsIntoView);
 }
 let view = 'workout';
 let liveSets = {}; // exerciseId -> array of {reps or seconds, done}
@@ -1996,6 +1998,7 @@ function setView(v) {
   // runs from the explicit "Sync now" button (manualDriveSyncNow), so
   // navigating here can never itself trigger a backup.
   render();
+  requestAnimationFrame(scrollActiveTabsIntoView);
 }
 
 // ---------- MISTAKE-PROOFING ----------
@@ -2015,7 +2018,7 @@ function hasUnsavedFocusProgress(dayIdx) {
 
 function selectDay(i, afterSwitch) {
   if (i === currentDayIdx) { if (afterSwitch) afterSwitch(); return; }
-  const doSwitch = () => { currentDayIdx = i; liveSets = {}; focusOverrideId = null; redoUnlocked = new Set(); render(); if (afterSwitch) afterSwitch(); };
+  const doSwitch = () => { currentDayIdx = i; liveSets = {}; focusOverrideId = null; redoUnlocked = new Set(); render(); requestAnimationFrame(scrollActiveTabsIntoView); if (afterSwitch) afterSwitch(); };
   if (hasUnsavedFocusProgress(currentDayIdx)) {
     showConfirm({
       title: 'Switch workout group?',
@@ -3229,7 +3232,16 @@ function render() {
     else app.innerHTML = renderHistory();
 
     if (view === 'progress') { setTimeout(renderCharts, 0); setTimeout(renderDurationRadarChart, 0); setTimeout(renderBodyweightChart, 0); }
-    requestAnimationFrame(scrollActiveTabsIntoView);
+    // Deliberately NOT called unconditionally here. scrollActiveTabsIntoView()
+    // force-scrolls the page to reveal the tab strip if the active pill is
+    // off-screen — correct right after an actual day/view switch, but render()
+    // also runs on every single set logged/adjusted. Calling it here meant
+    // that logging a set while scrolled down to see the tab strip (e.g. the
+    // 4th+ exercise card) would yank the page back up toward the tabs on
+    // every tap, fighting the scroll-preserving logic in
+    // renderPreservingScroll(). Callers that actually change the selected
+    // tab (setView, selectDay, selectProgressDay, selectProgressExercise,
+    // initial boot) call scrollActiveTabsIntoView() themselves instead.
     syncWorkoutWakeLock();
   } catch (err) {
     console.error('LiftLog render error:', err);
