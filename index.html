@@ -2248,17 +2248,44 @@ function propagateLinkedExerciseConfig(sourceEx) {
   });
 }
 
-function startTimerFor(exId) {
+function startTimerFor(exId, opts = {}) {
   const ex = getExerciseById(exId);
-  if (ex) startRestTimer(ex.rest);
+  if (!ex) return;
+  // opts.round: the "between rounds" rest for an alternating superset
+  // (after both/all group members have logged their matching-index set),
+  // as opposed to ex.rest which is the normal "between sets of this one
+  // exercise" rest. Falls back to ex.rest if no round-specific value is set.
+  if (opts.round && ex.supersetRoundRest != null) startRestTimer(ex.supersetRoundRest);
+  else startRestTimer(ex.rest);
+}
+
+// Alternate mode and its round-rest are a property of the whole superset
+// pairing, not of one exercise — so unlike supersetRest (which is
+// deliberately per-exercise, since it's "the rest when leaving THIS
+// exercise for its partner" and can differ by direction), these two need to
+// stay identical across every member of the group or the round-detection
+// logic in markSetDone() wouldn't make sense (one exercise alternating,
+// its partner not). Called from the exercise editor's save handler,
+// alongside propagateLinkedExerciseConfig.
+function propagateSupersetGroupConfig(sourceEx) {
+  if (!sourceEx.supersetGroup) return;
+  const day = DAYS.find(d => d.exercises.some(e => e.id === sourceEx.id));
+  if (!day) return;
+  getSupersetPartners(sourceEx, day).forEach(p => {
+    p.supersetAlternate = sourceEx.supersetAlternate;
+    p.supersetRoundRest = sourceEx.supersetRoundRest;
+  });
 }
 
 // ---------- SUPERSETS ----------
 // A superset is 2+ exercises on the same day sharing a supersetGroup id,
 // meant to be done back-to-back with little/no rest between them, then a
-// normal rest before whatever's next. This is deliberately just a grouping +
-// a shorter rest — it doesn't auto-alternate sets or change navigation; you
-// still tap between exercises yourself, same as always.
+// normal rest before whatever's next. By default this is just a grouping +
+// a shorter rest — you tap between exercises yourself. Optionally
+// (ex.supersetAlternate), it can instead auto-navigate set-by-set: log set 1
+// of A, get jumped straight to set 1 of B with no rest, and only rest once
+// every group member has logged that same set index (a "round"). See the
+// round-detection logic in markSetDone().
 const SUPERSET_COLORS = ['#ffb020', '#20c9d6', '#c77dff', '#ff6b9d', '#6bcf7f'];
 // Groups are labeled by first-appearance order within the day rather than
 // stored — so removing a group never leaves a gap like "Superset C" with no
@@ -2295,6 +2322,13 @@ function addToSuperset(exIdA, exIdB, dayIdx) {
   exB.supersetGroup = groupId;
   if (exA.supersetRest == null) exA.supersetRest = 0;
   if (exB.supersetRest == null) exB.supersetRest = 0;
+  // Alternate mode (do set 1 of A, then set 1 of B, rest, set 2 of A, ...) is
+  // off by default — plain "back-to-back, tap between them yourself" stays
+  // the default superset behavior. supersetRoundRest is the rest applied
+  // between rounds when alternate mode is on; null means "fall back to this
+  // exercise's normal ex.rest".
+  if (exA.supersetAlternate == null) exA.supersetAlternate = false;
+  if (exB.supersetAlternate == null) exB.supersetAlternate = false;
   // Move exB to sit directly after the rest of the group, so the group
   // renders adjacently without any special-cased non-adjacent grouping
   // logic in the card renderer. exB is removed from the array FIRST, then
@@ -2317,7 +2351,12 @@ function addToSuperset(exIdA, exIdB, dayIdx) {
 function cleanupSupersetAfterRemoval(day, groupId) {
   if (!groupId) return;
   const remaining = day.exercises.filter(e => e.supersetGroup === groupId);
-  if (remaining.length === 1) { remaining[0].supersetGroup = null; remaining[0].supersetRest = null; }
+  if (remaining.length === 1) {
+    remaining[0].supersetGroup = null;
+    remaining[0].supersetRest = null;
+    remaining[0].supersetAlternate = null;
+    remaining[0].supersetRoundRest = null;
+  }
 }
 function removeFromSuperset(exId, dayIdx) {
   const day = DAYS[dayIdx];
@@ -2326,6 +2365,8 @@ function removeFromSuperset(exId, dayIdx) {
   const groupId = ex.supersetGroup;
   ex.supersetGroup = null;
   ex.supersetRest = null;
+  ex.supersetAlternate = null;
+  ex.supersetRoundRest = null;
   cleanupSupersetAfterRemoval(day, groupId);
   persistDays();
   saveState();
@@ -2457,16 +2498,42 @@ function markSetDone(exId, setIdx) {
   const arr = liveSets[exId];
   const set = arr[setIdx];
   set.doneMark = !set.doneMark;
+
+  const ex = getExerciseById(exId);
+  const day = DAYS[currentDayIdx];
+  const isAlternatingSuperset = !!(ex && ex.supersetGroup && ex.supersetAlternate);
+  // Mid-round: another group member hasn't logged its set at this same
+  // index yet. Only meaningful the moment doneMark just became true — see
+  // the sole call site below.
+  let pendingPartner = null;
+
   if (set.doneMark) {
     // If this set finishes off the exercise AND every other exercise today is
     // already done, the whole workout is about to complete — there's nothing
     // left to rest for, so skip the timer instead of leaving one running with
     // no next set/exercise for it to lead into.
     const allSetsInThisExDone = arr.every(x => x.doneMark);
-    const otherExercisesRemain = DAYS[currentDayIdx].exercises.some(e => e.id !== exId && !isDoneToday(e.name, DAYS[currentDayIdx].label));
+    const otherExercisesRemain = day.exercises.some(e => e.id !== exId && !isDoneToday(e.name, day.label));
     const isFinalSetOfWorkout = allSetsInThisExDone && !otherExercisesRemain;
+
+    if (isAlternatingSuperset) {
+      pendingPartner = getSupersetPartners(ex, day).find(p => {
+        const parr = liveSets[p.id];
+        return parr && parr[setIdx] && !parr[setIdx].doneMark;
+      });
+    }
+
     if (isFinalSetOfWorkout) {
       skipTimer(); // clear out any timer still running from an earlier set of this exercise — nothing left to rest for
+    } else if (isAlternatingSuperset && pendingPartner) {
+      // A partner still owes this same set index — no rest yet, you're
+      // about to jump straight to their matching set below.
+      skipTimer();
+    } else if (isAlternatingSuperset && !allSetsInThisExDone) {
+      // Every group member has now logged this index (round complete) and
+      // this exercise still has more sets to go — this is the rest
+      // *between rounds*, not the normal per-set rest.
+      startTimerFor(exId, { round: true });
     } else {
       startTimerFor(exId);
     }
@@ -2482,10 +2549,15 @@ function markSetDone(exId, setIdx) {
   renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
 
+  // Jump straight to the partner's matching set (List Mode scrolls to it,
+  // Focus Mode switches to it) — done after the render/persist above so the
+  // just-logged set's own green "done" state is visible for a beat first.
+  if (pendingPartner) focusOnExercise(pendingPartner.id);
+
   const allDone = arr.every(x => x.doneMark);
   if (allDone) {
-    const ex = getExerciseById(exId);
-    setTimeout(() => { if (ex) finishExercise(ex); }, 250); // brief pause so the green "done" state is visible first
+    const exFull = getExerciseById(exId);
+    setTimeout(() => { if (exFull) finishExercise(exFull); }, 250); // brief pause so the green "done" state is visible first
   }
 }
 
@@ -4814,7 +4886,15 @@ function openExerciseEditor(exId, dayIdx) {
           <label style="${lbl}">Rest between sets (s)<input type="number" id="editExRestBetween" value="${ex.rest}"></label>
           <label style="${lbl}">Rest after exercise (s)<input type="number" id="editExRestAfter" value="${ex.transitionRest ?? TRANSITION_REST_SECONDS}"></label>
         </div>
-        ${ex.supersetGroup ? `<label style="${lbl}">Rest before next superset exercise (s)<input type="number" id="editExSupersetRest" min="0" value="${ex.supersetRest ?? 0}"></label>` : ''}
+        ${ex.supersetGroup ? `
+        <label style="${lbl}">Rest before next superset exercise (s)<input type="number" id="editExSupersetRest" min="0" value="${ex.supersetRest ?? 0}"></label>
+        <label style="display:flex; align-items:center; gap:8px; font-size:13px;">
+          <input type="checkbox" id="editExSupersetAlternate" ${ex.supersetAlternate ? 'checked' : ''}>
+          Alternate sets with superset partner (set 1 of this, then set 1 of the other, before resting)
+        </label>
+        <div class="meta" style="margin:0;">Applies to this whole superset pairing, not just this exercise. With this on, "rest before next superset exercise" above should usually be 0 — the app will only rest once both exercises have logged the same set number.</div>
+        <label style="${lbl}">Rest between rounds, if alternating (s)<input type="number" id="editExSupersetRoundRest" min="0" value="${ex.supersetRoundRest ?? ex.rest}"></label>
+        ` : ''}
         <label style="${lbl}">Deload after this many misses in a row<input type="number" id="editExFailThreshold" min="1" value="${getFailThreshold(ex)}"></label>
         <label style="${lbl}">Notes / cues (optional)<textarea id="editExNotes" rows="2" style="width:100%; resize:vertical; font-family:inherit; padding:10px; border-radius:8px; background:var(--surface-raised); border:1px solid var(--border-strong); color:var(--text); font-size:14px; box-sizing:border-box; font-weight:400;">${escapeHtml(ex.notes || '')}</textarea></label>
       </div>
@@ -4937,12 +5017,22 @@ function openExerciseEditor(exId, dayIdx) {
       if (!isNaN(ssRestV) && ssRestV >= 0) ex.supersetRest = ssRestV;
     }
 
+    const ssAlternateEl = overlay.querySelector('#editExSupersetAlternate');
+    if (ssAlternateEl) ex.supersetAlternate = ssAlternateEl.checked;
+
+    const ssRoundRestEl = overlay.querySelector('#editExSupersetRoundRest');
+    if (ssRoundRestEl) {
+      const ssRoundRestV = parseInt(ssRoundRestEl.value);
+      if (!isNaN(ssRoundRestV) && ssRoundRestV >= 0) ex.supersetRoundRest = ssRoundRestV;
+    }
+
     const threshV = parseInt(overlay.querySelector('#editExFailThreshold').value);
     if (!isNaN(threshV) && threshV >= 1) ex.failThreshold = threshV;
 
     ex.notes = overlay.querySelector('#editExNotes').value.trim();
 
     propagateLinkedExerciseConfig(ex);
+    propagateSupersetGroupConfig(ex);
     delete liveSets[exId]; // force re-generation with any new set count/targets
     persistLiveSets(exId);
     persistDays();
