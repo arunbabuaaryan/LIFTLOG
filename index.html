@@ -3694,24 +3694,85 @@ function getSessionVolume(dateKey, dayLabel, sessionNum) {
 // of your own bodyweight over time. One entry per calendar date; logging
 // again on the same day overwrites that day's entry rather than adding a
 // second one.
+// Weight is always stored canonically in lb (entry.weight). entry.unit just
+// records which unit the user actually typed in, so the input modal can
+// default to their last-used unit. Every display point converts to show
+// both units regardless of what's stored.
+const LB_PER_KG = 2.2046226218;
+function lbToKg(lb) { return lb / LB_PER_KG; }
+function kgToLb(kg) { return kg * LB_PER_KG; }
+function fmtWeight1(n) { return Math.round(n * 10) / 10; }
+function bothUnits(lb) { return `${fmtWeight1(lb)} lb (${fmtWeight1(lbToKg(lb))} kg)`; }
+
 function getBodyweightLog() {
   return (state.bodyweightLog || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
 }
 function logBodyweight() {
+  openBodyweightLogModal();
+}
+function openBodyweightLogModal() {
   const log = getBodyweightLog();
   const last = log[log.length - 1];
-  const input = prompt('Log today\'s bodyweight (lb):', last ? last.weight : '');
-  if (input === null) return;
-  const n = parseFloat(input);
-  if (isNaN(n) || n <= 0) { alert('Enter a valid weight.'); return; }
-  state.bodyweightLog = state.bodyweightLog || [];
-  const today = dateStr(new Date());
-  const existingIdx = state.bodyweightLog.findIndex(e => dateStr(e.date) === today);
-  const entry = { date: new Date().toISOString(), weight: n };
-  if (existingIdx !== -1) state.bodyweightLog[existingIdx] = entry;
-  else state.bodyweightLog.push(entry);
-  saveState();
-  render();
+  let unit = state.bodyweightUnit === 'kg' ? 'kg' : 'lb';
+
+  const valueFor = (u) => {
+    if (!last) return '';
+    const lb = last.weight;
+    return fmtWeight1(u === 'kg' ? lbToKg(lb) : lb);
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <h3>Log Bodyweight</h3>
+      <div class="meta" style="margin-bottom:0;">Enter today's weight — pick whichever unit you're weighing in.</div>
+      <div class="row" style="align-items:center; gap:8px; margin-top:12px;">
+        <input type="number" inputmode="decimal" step="0.1" min="1" class="confirm-input" id="bwInputField"
+          placeholder="Weight" value="${valueFor(unit)}" style="flex:1;">
+        <div class="row" style="gap:4px;">
+          <button class="btn small ${unit === 'lb' ? '' : 'secondary'}" id="bwUnitLbBtn">lb</button>
+          <button class="btn small ${unit === 'kg' ? '' : 'secondary'}" id="bwUnitKgBtn">kg</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px; gap:8px;">
+        <button class="btn secondary" id="bwCancelBtn" style="flex:1;">Cancel</button>
+        <button class="btn" id="bwSaveBtn" style="flex:1;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  const field = overlay.querySelector('#bwInputField');
+  const lbBtn = overlay.querySelector('#bwUnitLbBtn');
+  const kgBtn = overlay.querySelector('#bwUnitKgBtn');
+
+  const setUnit = (u) => {
+    unit = u;
+    lbBtn.className = `btn small ${unit === 'lb' ? '' : 'secondary'}`;
+    kgBtn.className = `btn small ${unit === 'kg' ? '' : 'secondary'}`;
+    field.value = valueFor(unit);
+  };
+  lbBtn.onclick = () => setUnit('lb');
+  kgBtn.onclick = () => setUnit('kg');
+
+  overlay.querySelector('#bwCancelBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#bwSaveBtn').onclick = () => {
+    const n = parseFloat(field.value);
+    if (isNaN(n) || n <= 0) { field.style.borderColor = 'var(--danger)'; field.focus(); return; }
+    const lbValue = unit === 'kg' ? kgToLb(n) : n;
+    state.bodyweightLog = state.bodyweightLog || [];
+    state.bodyweightUnit = unit;
+    const today = dateStr(new Date());
+    const existingIdx = state.bodyweightLog.findIndex(e => dateStr(e.date) === today);
+    const entry = { date: new Date().toISOString(), weight: fmtWeight1(lbValue), unit };
+    if (existingIdx !== -1) state.bodyweightLog[existingIdx] = entry;
+    else state.bodyweightLog.push(entry);
+    saveState();
+    close();
+    render();
+  };
+  setTimeout(() => field.focus(), 50);
 }
 function deleteBodyweightEntry(dateIso) {
   showConfirm({
@@ -4180,14 +4241,14 @@ function renderProgress() {
         if (!bw) return `<div class="empty" style="padding:10px 0;">Log your bodyweight to start tracking it here.</div>`;
         const changeText = bw.change30d == null ? ''
           : bw.change30d === 0 ? ' · flat over 30 days'
-          : ` · ${bw.change30d > 0 ? '+' : ''}${bw.change30d} lb over 30 days`;
+          : ` · ${bw.change30d > 0 ? '+' : ''}${fmtWeight1(bw.change30d)} lb (${bw.change30d > 0 ? '+' : ''}${fmtWeight1(lbToKg(bw.change30d))} kg) over 30 days`;
         const log = getBodyweightLog();
         const recentRows = log.slice(-5).reverse().map(e => `
           <div class="histitem row" style="padding:6px 0;">
-            <span class="meta" style="margin:0;">${new Date(e.date).toLocaleDateString()}: <strong>${e.weight} lb</strong></span>
+            <span class="meta" style="margin:0;">${new Date(e.date).toLocaleDateString()}: <strong>${bothUnits(e.weight)}</strong></span>
             <button class="btn small secondary" onclick="deleteBodyweightEntry('${e.date}')">🗑</button>
           </div>`).join('');
-        return `<div class="meta" style="margin-top:6px;">Latest: <strong>${bw.latest.weight} lb</strong> <span style="color:var(--text-faint);">(${new Date(bw.latest.date).toLocaleDateString()})</span>${changeText}</div>
+        return `<div class="meta" style="margin-top:6px;">Latest: <strong>${bothUnits(bw.latest.weight)}</strong> <span style="color:var(--text-faint);">(${new Date(bw.latest.date).toLocaleDateString()})</span>${changeText}</div>
           <div style="position:relative; height:200px; margin-top:10px;"><canvas id="bodyweightChart"></canvas></div>
           <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleBodyweightLogList()">📜 Recent entries ${bodyweightLogListOpen ? '▲' : '▼'}</div>
           <div id="bodyweightLogList" style="display:${bodyweightLogListOpen ? 'block' : 'none'};">${recentRows}</div>`;
@@ -4546,7 +4607,10 @@ function renderBodyweightChart() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => bothUnits(ctx.parsed.y) } }
+      },
       scales: {
         x: { ticks: { color: textFaintColor, maxTicksLimit: 6 }, grid: { color: gridColor } },
         y: { ticks: { color: textFaintColor }, grid: { color: gridColor } }
