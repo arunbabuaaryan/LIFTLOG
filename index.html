@@ -5439,7 +5439,7 @@ function renderManage() {
 
   const exList = day.exercises.map((ex, i) => `
     <div class="histitem row">
-      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span>${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')} — rest times below are independent per day; other settings stay in sync">🔗 linked</span>` : ''}${ex.supersetGroup ? ` <span class="badge" style="background:${getSupersetColor(day, ex.supersetGroup)}; color:#1a1a1a;">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)}</span>` : ''}</span>
+      <span>${escapeHtml(ex.name)} <span class="badge">${ex.mode}</span>${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')} — rest times below are independent per day; other settings stay in sync">🔗 linked · ${getLinkedCopies(ex.id).length}x/week</span>` : ''}${ex.supersetGroup ? ` <span class="badge" style="background:${getSupersetColor(day, ex.supersetGroup)}; color:#1a1a1a;">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)}</span>` : ''}<br><span class="meta" style="margin:0;">${escapeHtml(getExerciseMode(ex).label(ex, getExState(ex)))}</span></span>
       <span style="display:flex; gap:6px; flex-wrap:wrap;">
         <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
         <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, 1)" ${i===day.exercises.length-1?'disabled style="opacity:.35;"':''}>↓</button>
