@@ -192,6 +192,23 @@
     transition: background .25s ease, color .25s ease, border-color .25s ease;
   }
   .tab.active { background: var(--accent); color: #fff; border-color: transparent; }
+  @keyframes swipeEnterFromRight {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes swipeEnterFromLeft {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  /* Applied to #app right after a swipe-triggered day change so the new
+     content visibly slides in from the direction you swiped, instead of
+     just popping in. Purely a paint-time transform — added only after
+     scroll position is already restored, so it can't affect scroll math. */
+  #app.swipe-enter-from-right { animation: swipeEnterFromRight .22s cubic-bezier(.22,.61,.36,1); }
+  #app.swipe-enter-from-left { animation: swipeEnterFromLeft .22s cubic-bezier(.22,.61,.36,1); }
+  @media (prefers-reduced-motion: reduce) {
+    #app.swipe-enter-from-right, #app.swipe-enter-from-left { animation: none; }
+  }
   @keyframes levelUpPulse {
     0% { box-shadow: 0 0 0 0 var(--success-glow); }
     70% { box-shadow: 0 0 0 16px rgba(52,211,153,0); }
@@ -1932,11 +1949,12 @@ function setChartRange(r) {
   renderPreservingScroll();
 }
 
-function selectProgressDay(i) {
+function selectProgressDay(i, swipeDirection) {
   progressDayIdx = i;
   progressExerciseId = null; // reset so it defaults to the first exercise of the new day
   renderPreservingScroll();
   requestAnimationFrame(scrollActiveTabsIntoView);
+  if (swipeDirection) playSwipeTransition(swipeDirection);
 }
 
 function selectProgressExercise(exId) {
@@ -2058,9 +2076,25 @@ function hasUnsavedFocusProgress(dayIdx) {
   });
 }
 
-function selectDay(i, afterSwitch) {
+// Plays a brief directional slide+fade on #app right after a swipe-triggered
+// day change. Called AFTER render()/restoreScrollAnchor() have already run,
+// so the transform is purely visual on top of an already-correct scroll
+// position — it never factors into the anchor math itself. The class is
+// removed once the animation finishes so it doesn't linger and interfere
+// with an unrelated re-render's own scroll-anchor calculations.
+function playSwipeTransition(direction) {
+  const el = document.getElementById('app');
+  if (!el) return;
+  const enterClass = direction > 0 ? 'swipe-enter-from-right' : 'swipe-enter-from-left';
+  el.classList.remove('swipe-enter-from-right', 'swipe-enter-from-left');
+  void el.offsetWidth; // force reflow so back-to-back swipes always restart the animation
+  el.classList.add(enterClass);
+  el.addEventListener('animationend', () => el.classList.remove(enterClass), { once: true });
+}
+
+function selectDay(i, afterSwitch, swipeDirection) {
   if (i === currentDayIdx) { if (afterSwitch) afterSwitch(); return; }
-  const doSwitch = () => { currentDayIdx = i; liveSets = {}; focusOverrideId = null; redoUnlocked = new Set(); render(); requestAnimationFrame(scrollActiveTabsIntoView); if (afterSwitch) afterSwitch(); };
+  const doSwitch = () => { currentDayIdx = i; liveSets = {}; focusOverrideId = null; redoUnlocked = new Set(); render(); requestAnimationFrame(scrollActiveTabsIntoView); if (swipeDirection) playSwipeTransition(swipeDirection); if (afterSwitch) afterSwitch(); };
   if (hasUnsavedFocusProgress(currentDayIdx)) {
     showConfirm({
       title: 'Switch workout group?',
@@ -2107,10 +2141,10 @@ function handleSwipeEnd(e) {
   const direction = dx < 0 ? 1 : -1; // swipe left = next day, swipe right = previous day
   if (view === 'workout' || view === 'manage') {
     const next = (currentDayIdx + direction + DAYS.length) % DAYS.length; // wrap around at both ends
-    selectDay(next);
+    selectDay(next, null, direction);
   } else if (view === 'progress') {
     const next = (progressDayIdx + direction + DAYS.length) % DAYS.length; // wrap around at both ends
-    selectProgressDay(next);
+    selectProgressDay(next, direction);
   }
 }
 
@@ -3406,7 +3440,22 @@ function scrollTabIntoView(containerId, idx) {
   const container = document.getElementById(containerId);
   if (!container || idx < 0) return;
   const child = container.children[idx];
-  if (child) child.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+  if (!child) return;
+  // Deliberately NOT using child.scrollIntoView() here: with block:'nearest'
+  // it will also scroll the whole PAGE vertically if this tab strip happens
+  // to be off-screen (e.g. right after a swipe restores scroll deep into a
+  // card below) — which fights renderPreservingScroll's anchor restoration
+  // and makes the swipe feel like it snaps/jumps. Scrolling the container's
+  // own scrollLeft directly keeps this 100% horizontal, so it can never
+  // move the page vertically.
+  const containerRect = container.getBoundingClientRect();
+  const childRect = child.getBoundingClientRect();
+  const EDGE_PADDING = 8;
+  if (childRect.left < containerRect.left) {
+    container.scrollBy({ left: childRect.left - containerRect.left - EDGE_PADDING, behavior: 'smooth' });
+  } else if (childRect.right > containerRect.right) {
+    container.scrollBy({ left: childRect.right - containerRect.right + EDGE_PADDING, behavior: 'smooth' });
+  }
 }
 
 function scrollActiveTabsIntoView() {
