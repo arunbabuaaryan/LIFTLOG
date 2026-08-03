@@ -159,6 +159,13 @@
        explicit, correct compensation in play.
     */
     overflow-anchor: none;
+    /* Without this, a horizontal swipe that starts at the very top of the
+       page (scroll y = 0 — exactly where the dashboard header's tiles,
+       including Recovery, live) can get partially absorbed by the browser's
+       own pull-to-refresh/rubber-band gesture before our touch listeners see
+       a clean delta, making swipes feel dead specifically on those first
+       couple of tiles while identical swipes lower on the page work fine. */
+    overscroll-behavior-y: contain;
   }
   header {
     padding: 18px 16px 15px; background: linear-gradient(180deg, var(--header-grad-a) 0%, var(--header-grad-b) 100%);
@@ -2152,6 +2159,7 @@ function handleSwipeEnd(e) {
 // but the element itself persists, so the listeners keep working).
 document.getElementById('app').addEventListener('touchstart', handleSwipeStart, { passive: true });
 document.getElementById('app').addEventListener('touchend', handleSwipeEnd, { passive: true });
+document.getElementById('app').addEventListener('touchcancel', () => { swipeStartX = null; }, { passive: true });
 
 // ---------- LOGGING ----------
 function getLastValueForSet(ex, setIdx) {
