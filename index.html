@@ -1315,9 +1315,46 @@ function showConfirm({ title, message, confirmLabel = 'Confirm', danger = false,
   if (requireText) setTimeout(() => overlay.querySelector('#confirmInputField')?.focus(), 50);
 }
 
-// Lets the user manually set (or clear) today's logged workout duration, overriding
+// Lists every logged session for one specific workout group (e.g. all Abs
+// sessions, not just the last 5 overall) so an outlier duration buried a few
+// sessions back — the kind that skews the min/max range shown in Progress —
+// can actually be found and fixed, not just guessed at from the last 5.
+function openDayDurationHistoryModal(dayLabel) {
+  const day = DAYS.find(d => d.label === dayLabel);
+  const sessions = getDaySessionsWithDuration(dayLabel).slice().reverse(); // most recent first
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  const rowsHtml = sessions.length
+    ? sessions.map(({dateKey, sessionNum, mins}) => {
+        const sessLabel = sessionNum > 1 ? ` (session ${sessionNum})` : '';
+        const dayArg = escapeHtml(dayLabel).replace(/'/g, "\\'");
+        const editAttr = `document.getElementById('dayDurHistOverlay').remove(); openDurationEditModal('${dateKey}', '${dayArg}', ${sessionNum}, ${mins != null ? mins : 'null'})`;
+        return `<div class="histitem" style="cursor:pointer; display:flex; align-items:center; justify-content:space-between;" onclick="${editAttr}">
+          <span>${dateKey}${sessLabel}: ${mins != null ? `<strong>${mins} min</strong>` : 'no duration — tap to set'}</span>
+          <span style="opacity:.55; font-size:11px;">✏️</span>
+        </div>`;
+      }).join('')
+    : `<div class="empty">No sessions logged yet for this day.</div>`;
+  overlay.id = 'dayDurHistOverlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal" style="max-height:80vh; overflow-y:auto;">
+      <h3>${day ? day.icon + ' ' : ''}${escapeHtml(dayLabel)} — Session Lengths</h3>
+      <div class="meta" style="margin-bottom:10px;">Tap any session to correct its duration. The fix updates the average, range, trend, and predictions everywhere automatically.</div>
+      ${rowsHtml}
+      <div class="row" style="margin-top:16px;">
+        <button class="btn secondary" id="dayDurHistCloseBtn" style="flex:1;">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#dayDurHistCloseBtn').onclick = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+
+// Lets the user manually set (or clear) a logged workout's duration, overriding
 // the timestamp-derived estimate. Opened by tapping the ✏️ next to the Duration
-// metric on the Today card.
+// metric on the Today card, from the History tab's recent sessions list, or
+// from the per-day duration history modal.
 function openDurationEditModal(dateKey, dayLabel, sessionNum, currentMins) {
   const hasOverride = getDurationOverride(dateKey, dayLabel, sessionNum) != null;
   const overlay = document.createElement('div');
@@ -1711,7 +1748,11 @@ function getAllUniqueSessions() {
     const key = sessionKey(dk, h.day, num);
     if (!seen.has(key)) seen.set(key, { dateKey: dk, dayLabel: h.day, sessionNum: num });
   });
-  return [...seen.values()];
+  // Always return in true chronological order — history push-order isn't
+  // guaranteed to match date order (backdated/edited entries can append
+  // out of sequence), so every caller needs this guarantee, not just the
+  // ones that remembered to re-sort themselves.
+  return [...seen.values()].sort((a,b) => a.dateKey.localeCompare(b.dateKey) || a.sessionNum - b.sessionNum);
 }
 
 function getMonthlySessionCounts(monthsBack = 6) {
@@ -3644,7 +3685,11 @@ function computeSessionSpanMinutes(times) {
   return Math.round((Math.max(...best) - Math.min(...best)) / 60000);
 }
 
-function getMuscleGroupDurationStats(dayLabel) {
+// Every unique session logged for one specific workout group (day), each with
+// its resolved duration (override if set, else timestamp-derived). Shared by
+// getMuscleGroupDurationStats (aggregate) and the per-day duration history
+// modal (drill-down) so they can never disagree with each other.
+function getDaySessionsWithDuration(dayLabel) {
   const day = DAYS.find(d => d.label === dayLabel);
   const { anchorDate: curAnchor, sessionNum: curSessionNum } = getActiveSession(dayLabel);
   const currentIsIncomplete = day ? getTodayCompletionPct(day) < 100 : false;
@@ -3661,14 +3706,19 @@ function getMuscleGroupDurationStats(dayLabel) {
   if (currentIsIncomplete && !currentHasOverride) {
     sessions = sessions.filter(s => !(s.dateKey === curAnchor && s.sessionNum === curSessionNum));
   }
+  return sessions.map(({dateKey, sessionNum}) => ({
+    dateKey, sessionNum, mins: getSessionDuration(dateKey, dayLabel, sessionNum)
+  }));
+}
+
+function getMuscleGroupDurationStats(dayLabel) {
   // Use the exact same duration function as the completion modal and the
   // duration-edit screen (override, else sessionStart-aware span) — this
   // used to reimplement its own span calc from raw entry timestamps only,
   // which skipped sessionStart and so under-counted vs. what the modal shows.
-  const durationsWithDate = sessions.map(({dateKey, sessionNum}) => {
-    const mins = getSessionDuration(dateKey, dayLabel, sessionNum);
-    return mins == null ? null : { date: dateKey, mins };
-  }).filter(d => d != null);
+  const durationsWithDate = getDaySessionsWithDuration(dayLabel)
+    .filter(d => d.mins != null)
+    .map(d => ({ date: d.dateKey, mins: d.mins }));
   if (durationsWithDate.length === 0) return null;
   const durations = durationsWithDate.map(d => d.mins);
   const mean = Math.round(durations.reduce((a,b) => a+b, 0) / durations.length);
@@ -4141,8 +4191,9 @@ function renderProgress() {
 
   const durationByDay = DAYS.map(d => {
     const stats = getMuscleGroupDurationStats(d.label);
-    return `<div class="histitem">
-      <strong>${d.icon} ${escapeHtml(d.label)}</strong><br>
+    const dayArg = escapeHtml(d.label).replace(/'/g, "\\'");
+    return `<div class="histitem" style="cursor:pointer;" onclick="openDayDurationHistoryModal('${dayArg}')">
+      <div class="row" style="align-items:center;"><strong>${d.icon} ${escapeHtml(d.label)}</strong><span style="opacity:.55; font-size:11px;">✏️</span></div>
       ${stats
         ? `avg <strong>${stats.mean} min</strong> · range ${stats.min}–${stats.max} min <span style="color:var(--text-faint)">(${stats.count} session${stats.count>1?'s':''})</span><br>
            last session: <strong>${stats.last} min</strong> <span style="color:var(--text-faint)">(${new Date(stats.lastDate).toLocaleDateString()})</span>`
@@ -5908,14 +5959,7 @@ function renderHistory() {
       <span style="color:var(--text-faint)">${date}</span>
     </div>`;
   }).join('');
-  const seenSessions = new Map();
-  state.history.forEach(h => {
-    const dk = getEntryDateKey(h);
-    const num = getEntrySessionNum(h);
-    const key = sessionKey(dk, h.day, num);
-    if (!seenSessions.has(key)) seenSessions.set(key, { dateKey: dk, dayLabel: h.day, sessionNum: num });
-  });
-  const recentSessions = [...seenSessions.values()].slice(-5).reverse();
+  const recentSessions = getAllUniqueSessions().slice(-5).reverse();
   const durationsHtml = recentSessions.map(({dateKey, dayLabel, sessionNum}) => {
     const mins = getSessionDuration(dateKey, dayLabel, sessionNum);
     const label = sessionNum > 1 ? `${dayLabel} (session ${sessionNum})` : dayLabel;
