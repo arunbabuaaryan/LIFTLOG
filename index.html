@@ -333,6 +333,11 @@
   .livectrl-label { font-size: 11px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
   .livectrl-val { font-size: 14px; font-weight: 700; min-width: 44px; text-align: center; color: var(--text); }
   .sets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* Timed exercises (Abs etc.) show a 5th control — the ▶ hold-timer button —
+     alongside -/value/+/Done. That doesn't fit in a 2-column tile's ~150px
+     width without spilling into the neighboring tile, so those get their own
+     full-width row instead of sharing a row with another set. */
+  .sets.sets-timed { grid-template-columns: 1fr; }
   .setbox {
     min-width: 156px; height: 56px; border-radius: 13px; background: var(--surface-raised);
     display: flex; align-items: center; justify-content: space-between; padding: 0 4px;
@@ -3557,7 +3562,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
       return last ? `<div class="meta" style="color:var(--text-faint);">Last: ${escapeHtml(formatLoggedEntry(last))}</div>` : '';
     })()}
     <div class="row" style="margin-bottom:10px; gap:16px;">${weightControl}${setsControl}</div>
-    <div class="sets">${setsHtml}</div>
+    <div class="sets${ex.mode === 'timed' ? ' sets-timed' : ''}">${setsHtml}</div>
     <div class="row" style="margin-top:10px;">
       <button class="btn small secondary" onclick="matchSet1('${ex.id}')">Match set 1</button>
       <button class="btn small secondary" onclick="skipExercise('${ex.id}')">Skip</button>
