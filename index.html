@@ -3508,7 +3508,8 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
         <h3>✅ ${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>
         <button class="btn small secondary" onclick="unlockExerciseForRedo('${ex.id}')">↻ Redo</button>
       </div>
-      <div class="meta" style="margin-bottom:0;">Logged: ${escapeHtml(loggedLabel)}</div>
+      <div class="meta">Logged: ${escapeHtml(loggedLabel)}</div>
+      <div class="meta" style="margin-bottom:0; color:var(--text-faint);">Next: ${escapeHtml(targetLabel(ex))}</div>
     </div>`;
   }
 
