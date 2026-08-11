@@ -2474,16 +2474,20 @@ function matchSet1(exId) {
 
 function skipExercise(exId) {
   const ex = getExerciseById(exId);
-  const exName = ex ? ex.name : 'this exercise';
+  if (!ex) return;
+  const exName = ex.name;
+  const arr = ensureLive(ex); // guarantees liveSets[exId] exists so completed sets (if any) are preserved below
+  const hasCompletedSets = arr.some(x => x.doneMark);
   showConfirm({
     title: 'Skip exercise?',
-    message: `Skip ${exName} for today? No progress or history will be recorded.`,
+    message: hasCompletedSets
+      ? `Skip the rest of ${exName}? Sets already checked off stay as logged; the remaining set(s) will be logged as 0.`
+      : `Skip ${exName} for today? All set(s) will be logged as 0 — progression left unchanged this session.`,
     confirmLabel: 'Skip',
     danger: true,
     onConfirm: () => {
-      delete liveSets[exId];
-      persistLiveSets(exId);
-      renderPreservingScroll(`card-${exId}`);
+      arr.forEach(x => { if (!x.doneMark) x.value = 0; });
+      finishExerciseConfirmed(ex); // logs completed sets as-is + zeros for the rest, same as a manual finish with skipped sets
       requestAnimationFrame(() => requestAnimationFrame(() => scrollToNextIncomplete(ex)));
     }
   });
