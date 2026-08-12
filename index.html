@@ -406,6 +406,15 @@
   .timer-extend-btn.hold-mode { right: auto; left: 50%; bottom: 90px; transform: translateX(-50%); padding: 11px 20px; font-size: 14px; }
   .timer-extend-btn:active { transform: scale(.94); }
   .timer-extend-btn.hold-mode:active { transform: translateX(-50%) scale(.94); }
+  .timer-cancel-btn {
+    position: fixed; right: 118px; bottom: 122px; padding: 9px 14px; border-radius: 20px;
+    background: var(--surface-raised); color: var(--text); border: 1.5px solid var(--border-strong);
+    font-size: 13px; font-weight: 800; z-index: 20; box-shadow: 0 4px 14px rgba(0,0,0,.3);
+    display: flex; align-items: center; justify-content: center; opacity: .85;
+  }
+  .timer-cancel-btn.hold-mode { right: auto; left: 50%; bottom: 40px; transform: translateX(-50%); padding: 11px 20px; font-size: 14px; }
+  .timer-cancel-btn:active { transform: scale(.94); }
+  .timer-cancel-btn.hold-mode:active { transform: translateX(-50%) scale(.94); }
   .timer-flash-overlay {
     position: fixed; inset: 0; background: #fff; z-index: 999; pointer-events: none;
     animation: timerFlashPulse 0.9s ease-out;
@@ -580,6 +589,7 @@
 </div>
 
 <div class="timer-extend-btn" id="timerExtendBtn" style="display:none;" onclick="event.stopPropagation(); extendTimer(15)">+15s</div>
+<div class="timer-cancel-btn" id="timerCancelBtn" style="display:none;" onclick="event.stopPropagation(); skipTimer()">✕ Cancel</div>
 <div class="timer-fab" id="timerFab" style="display:none;" onclick="skipTimer()"></div>
 
 <script>
@@ -2462,11 +2472,16 @@ function removeFromSuperset(exId, dayIdx) {
   render();
 }
 
-function matchSet1(exId) {
+function matchLastSet(exId) {
   const arr = liveSets[exId];
   if (!arr || arr.length === 0) return;
-  const first = arr[0].value;
-  for (let i = 1; i < arr.length; i++) arr[i].value = first;
+  const last = arr[arr.length - 1].value;
+  // Only fill sets that haven't been logged yet — already-checked-off sets
+  // keep whatever was actually performed, since those are historical fact,
+  // not a target to overwrite.
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (!arr[i].doneMark) arr[i].value = last;
+  }
   if (navigator.vibrate) navigator.vibrate(20);
   renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
@@ -3073,6 +3088,8 @@ function applyTimerModeClass() {
   document.getElementById('timerFab').classList.toggle('hold-mode', isHold);
   const btn = document.getElementById('timerExtendBtn');
   if (btn) btn.classList.toggle('hold-mode', isHold);
+  const cancelBtn = document.getElementById('timerCancelBtn');
+  if (cancelBtn) cancelBtn.classList.toggle('hold-mode', isHold);
 }
 // Adds time to whichever timer (rest or hold) is currently running. Reuses
 // the same restRemaining/timerInterval the countdown already ticks on, so
@@ -3090,10 +3107,14 @@ function extendTimer(seconds) {
 function showExtendBtn() {
   const btn = document.getElementById('timerExtendBtn');
   if (btn) btn.style.display = 'flex';
+  const cancelBtn = document.getElementById('timerCancelBtn');
+  if (cancelBtn) cancelBtn.style.display = 'flex';
 }
 function hideExtendBtn() {
   const btn = document.getElementById('timerExtendBtn');
   if (btn) btn.style.display = 'none';
+  const cancelBtn = document.getElementById('timerCancelBtn');
+  if (cancelBtn) cancelBtn.style.display = 'none';
 }
 function skipTimer() {
   clearInterval(timerInterval);
@@ -3569,7 +3590,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
     <div class="row" style="margin-bottom:10px; gap:16px;">${weightControl}${setsControl}</div>
     <div class="sets${ex.mode === 'timed' ? ' sets-timed' : ''}">${setsHtml}</div>
     <div class="row" style="margin-top:10px;">
-      <button class="btn small secondary" onclick="matchSet1('${ex.id}')">Match set 1</button>
+      <button class="btn small secondary" onclick="matchLastSet('${ex.id}')">Match last set</button>
       <button class="btn small secondary" onclick="skipExercise('${ex.id}')">Skip</button>
       <button class="btn small" onclick="finishExercise(DAYS[${currentDayIdx}].exercises.find(e=>e.id==='${ex.id}'))">Finish</button>
     </div>
