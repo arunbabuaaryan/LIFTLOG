@@ -403,9 +403,17 @@
     font-size: 13px; font-weight: 800; z-index: 20; box-shadow: 0 4px 14px rgba(0,0,0,.3);
     display: flex; align-items: center; justify-content: center;
   }
-  .timer-extend-btn.hold-mode { right: auto; left: 50%; bottom: 90px; transform: translateX(-50%); padding: 11px 20px; font-size: 14px; }
+  .timer-extend-btn.hold-mode { right: auto; left: 50%; bottom: 140px; transform: translateX(-50%); padding: 11px 20px; font-size: 14px; }
   .timer-extend-btn:active { transform: scale(.94); }
   .timer-extend-btn.hold-mode:active { transform: translateX(-50%) scale(.94); }
+  .timer-stop-btn {
+    position: fixed; display: none; left: 50%; bottom: 90px; transform: translateX(-50%);
+    padding: 11px 22px; border-radius: 20px;
+    background: linear-gradient(155deg, #ffb648, #ff9500); color: #1a1a1a;
+    border: 1.5px solid rgba(0,0,0,.1); font-size: 14px; font-weight: 800; z-index: 20;
+    box-shadow: 0 4px 14px rgba(255,149,0,.4);
+  }
+  .timer-stop-btn:active { transform: translateX(-50%) scale(.94); }
   .timer-cancel-btn {
     position: fixed; right: 118px; bottom: 122px; padding: 9px 14px; border-radius: 20px;
     background: var(--surface-raised); color: var(--text); border: 1.5px solid var(--border-strong);
@@ -589,6 +597,7 @@
 </div>
 
 <div class="timer-extend-btn" id="timerExtendBtn" style="display:none;" onclick="event.stopPropagation(); extendTimer(15)">+15s</div>
+<div class="timer-stop-btn" id="timerStopBtn" style="display:none;" onclick="event.stopPropagation(); stopHoldTimer()">⏹ Stop &amp; log</div>
 <div class="timer-cancel-btn" id="timerCancelBtn" style="display:none;" onclick="event.stopPropagation(); skipTimer()">✕ Cancel</div>
 <div class="timer-fab" id="timerFab" style="display:none;" onclick="skipTimer()"></div>
 
@@ -2991,6 +3000,7 @@ let timerEndAt = null; // absolute Date.now()-based timestamp the running timer 
 // done instead of just going silent like a rest timer does.
 let timerKind = 'rest';
 let holdExId = null, holdSetIdx = null;
+let holdStartSeconds = 0; // the target duration this hold set started at, captured once so later stepper taps on the set can't shift what "elapsed" means
 function startRestTimer(seconds) {
   clearInterval(timerInterval);
   timerKind = 'rest';
@@ -3019,6 +3029,7 @@ function startHoldTimer(exId, setIdx) {
   clearInterval(timerInterval);
   timerKind = 'hold';
   holdExId = exId; holdSetIdx = setIdx;
+  holdStartSeconds = seconds;
   restRemaining = seconds;
   timerEndAt = Date.now() + seconds * 1000;
   const fab = document.getElementById('timerFab');
@@ -3075,6 +3086,31 @@ function completeHoldSet(exId, setIdx) {
   if (!arr || !arr[setIdx] || arr[setIdx].doneMark) return;
   markSetDone(exId, setIdx); // marks done + triggers the normal rest timer / finish flow
 }
+// Ends a hold early and logs however long was actually held, instead of
+// discarding the set (skipTimer) or requiring the full target duration.
+// Recomputes elapsed from the absolute end timestamp (same self-correcting
+// approach as tickTimer) rather than trusting restRemaining, which only
+// updates once a second. The partial value then flows through the normal
+// set-done path, so it's still subject to the exercise's success/fail check
+// (a short hold correctly counts as a miss for progression purposes).
+function stopHoldTimer() {
+  if (timerKind !== 'hold' || !holdExId) return;
+  const exId = holdExId, setIdx = holdSetIdx;
+  const remaining = Math.max(0, Math.round((timerEndAt - Date.now()) / 1000));
+  const elapsed = Math.max(0, holdStartSeconds - remaining);
+  clearInterval(timerInterval);
+  timerInterval = null;
+  const fab = document.getElementById('timerFab');
+  fab.style.display = 'none';
+  fab.classList.remove('urgent');
+  hideExtendBtn();
+  syncWorkoutWakeLock();
+  const arr = liveSets[exId];
+  if (arr && arr[setIdx] && !arr[setIdx].doneMark) {
+    arr[setIdx].value = elapsed;
+  }
+  completeHoldSet(exId, setIdx);
+}
 function updateFab() {
   const fab = document.getElementById('timerFab');
   const m = Math.floor(restRemaining/60), s = restRemaining%60;
@@ -3109,12 +3145,16 @@ function showExtendBtn() {
   if (btn) btn.style.display = 'flex';
   const cancelBtn = document.getElementById('timerCancelBtn');
   if (cancelBtn) cancelBtn.style.display = 'flex';
+  const stopBtn = document.getElementById('timerStopBtn');
+  if (stopBtn) stopBtn.style.display = (timerKind === 'hold') ? 'flex' : 'none';
 }
 function hideExtendBtn() {
   const btn = document.getElementById('timerExtendBtn');
   if (btn) btn.style.display = 'none';
   const cancelBtn = document.getElementById('timerCancelBtn');
   if (cancelBtn) cancelBtn.style.display = 'none';
+  const stopBtn = document.getElementById('timerStopBtn');
+  if (stopBtn) stopBtn.style.display = 'none';
 }
 function skipTimer() {
   clearInterval(timerInterval);
