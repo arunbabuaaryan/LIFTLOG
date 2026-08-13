@@ -499,6 +499,18 @@
   }
   .btn.danger { background: var(--danger); }
 
+  /* Emoji picker grid, used for choosing a workout day's icon */
+  .emoji-grid {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;
+    margin: 12px 0; max-height: 40vh; overflow-y: auto;
+  }
+  .emoji-opt {
+    font-size: 24px; padding: 8px 0; border-radius: 10px; text-align: center;
+    background: var(--surface-raised); border: 1.5px solid transparent; cursor: pointer;
+  }
+  .emoji-opt:active { transform: scale(.88); }
+  .emoji-opt.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--surface-raised)); }
+
   /* Brief highlight when a set's value is adjusted, so rapid tapping gets visual feedback. */
   @keyframes setChanged {
     0% { box-shadow: 0 0 0 0 var(--accent); }
@@ -1361,6 +1373,48 @@ function showConfirm({ title, message, confirmLabel = 'Confirm', danger = false,
     onConfirm();
   };
   if (requireText) setTimeout(() => overlay.querySelector('#confirmInputField')?.focus(), 50);
+}
+
+// Curated set of workout-relevant emoji, plus a free-text fallback so
+// nothing is off-limits — just not everything is one tap away.
+const EMOJI_CHOICES = [
+  '💪','🏋️','🔥','🦵','🎽','🔺','🥊','🏃','🚴','🧘','🤸','🏊',
+  '🥋','⚡','🦾','🫀','🧠','💥','🦿','🏆','👟','🥇','🔨','🌪️',
+  '🐉','🦁','🐺','🦈','🎯','🩸','🧊','☠️','🚀','⭐','🎪','🌊'
+];
+
+// Generic emoji picker: shows a curated grid plus a paste-your-own field,
+// and hands the chosen emoji back via callback so callers (new day vs.
+// renaming an existing day's icon) can decide what to do with it.
+function openEmojiPickerModal(currentIcon, onPick) {
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <h3>Choose an icon</h3>
+      <div class="emoji-grid">
+        ${EMOJI_CHOICES.map(e => `<div class="emoji-opt${e === currentIcon ? ' selected' : ''}" data-emoji="${e}">${e}</div>`).join('')}
+      </div>
+      <div class="meta" style="margin-bottom:0;">Or paste any other emoji:</div>
+      <input type="text" class="confirm-input" id="customEmojiField" placeholder="Paste an emoji" maxlength="8">
+      <div class="row" style="margin-top:16px; gap:8px;">
+        <button class="btn secondary" id="emojiCancelBtn" style="flex:1;">Cancel</button>
+        <button class="btn" id="emojiUseCustomBtn" style="flex:1;">Use pasted</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#emojiCancelBtn').onclick = close;
+  overlay.querySelectorAll('.emoji-opt').forEach(el => {
+    el.onclick = () => { const emoji = el.dataset.emoji; close(); onPick(emoji); };
+  });
+  overlay.querySelector('#emojiUseCustomBtn').onclick = () => {
+    const val = overlay.querySelector('#customEmojiField').value.trim();
+    if (!val) return;
+    close();
+    onPick(val);
+  };
 }
 
 // Lists every logged session for one specific workout group (e.g. all Abs
@@ -2484,13 +2538,18 @@ function removeFromSuperset(exId, dayIdx) {
 function matchLastSet(exId) {
   const arr = liveSets[exId];
   if (!arr || arr.length === 0) return;
-  const last = arr[arr.length - 1].value;
-  // Only fill sets that haven't been logged yet — already-checked-off sets
-  // keep whatever was actually performed, since those are historical fact,
-  // not a target to overwrite.
-  for (let i = 0; i < arr.length - 1; i++) {
-    if (!arr[i].doneMark) arr[i].value = last;
+  // Source is the most recently completed set, not just the final array
+  // slot — if the last set hasn't been done yet, it's still sitting at its
+  // untouched default target, so using it as the source silently no-ops
+  // (upcoming sets already default to that same value). The last *done*
+  // set actually reflects what was performed.
+  let lastDoneIdx = -1;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i].doneMark) { lastDoneIdx = i; break; }
   }
+  if (lastDoneIdx === -1) return; // nothing logged yet to match from
+  const val = arr[lastDoneIdx].value;
+  arr.forEach(x => { if (!x.doneMark) x.value = val; });
   if (navigator.vibrate) navigator.vibrate(20);
   renderPreservingScroll(`card-${exId}`);
   persistLiveSets(exId);
@@ -5023,14 +5082,26 @@ function removeDay(dayIdx) {
 function addDay() {
   const label = prompt('New muscle group / day name (e.g. "Arms", "Calves"):');
   if (!label || !label.trim()) return;
-  const icon = prompt('Pick an emoji icon for this day (or leave blank for default):', '⭐') || '⭐';
-  const id = label.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_') + '_' + Date.now().toString(36).slice(-4);
-  const color = DAY_PALETTE[DAYS.length % DAY_PALETTE.length];
-  DAYS.push({ id, label: label.trim(), icon, color, exercises: [] });
-  persistDays();
-  currentDayIdx = DAYS.length - 1;
-  render();
-  alert(`Added "${label.trim()}". Now add exercises to it below.`);
+  const cleanLabel = label.trim();
+  openEmojiPickerModal('⭐', (icon) => {
+    const id = cleanLabel.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '_' + Date.now().toString(36).slice(-4);
+    const color = DAY_PALETTE[DAYS.length % DAY_PALETTE.length];
+    DAYS.push({ id, label: cleanLabel, icon, color, exercises: [] });
+    persistDays();
+    currentDayIdx = DAYS.length - 1;
+    render();
+    alert(`Added "${cleanLabel}". Now add exercises to it below.`);
+  });
+}
+
+function changeDayIcon(dayIdx) {
+  const day = DAYS[dayIdx];
+  if (!day) return;
+  openEmojiPickerModal(day.icon, (icon) => {
+    day.icon = icon;
+    persistDays();
+    render();
+  });
 }
 
 function removeExercise(dayIdx, exId) {
@@ -5377,7 +5448,7 @@ function manualDeload(exId) {
   const s = getExState(ex);
   showConfirm({
     title: `Deload "${ex.name}"?`,
-    message: `Applies the same step-down your progression already uses after enough missed sessions — for a planned lighter week rather than waiting to actually miss reps.`,
+    message: `Applies the same step-down your progression already uses after enough missed sessions — for a planned lighter week rather than waiting to actually miss reps. Currently: ${mode.label(ex, s)}.`,
     confirmLabel: 'Deload Now',
     onConfirm: () => {
       s.failStreak = Math.max(0, getFailThreshold(ex) - 1);
@@ -5385,6 +5456,30 @@ function manualDeload(exId) {
       saveState();
       render();
       alert(`Deloaded "${ex.name}"${result && result.message ? ': ' + result.message : '.'}`);
+    }
+  });
+}
+// The reactive counterpart to manualDeload — jump straight to next
+// session's target rather than waiting to actually hit today's target
+// (e.g. you know a weight is too easy and don't want to burn a session
+// proving it). Reuses the exact same per-mode success step onSuccess()
+// already uses after a real successful session, so it can't drift out of
+// sync with what leveling up for real does.
+function manualLoad(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  const mode = getExerciseMode(ex);
+  if (!mode.onSuccess) { alert(`"${ex.name}" doesn't have a progression to advance.`); return; }
+  const s = getExState(ex);
+  showConfirm({
+    title: `Advance "${ex.name}"?`,
+    message: `Applies the same step-up your progression uses after a successful session — for skipping ahead rather than waiting to actually hit today's target. Currently: ${getExerciseMode(ex).label(ex, s)}.`,
+    confirmLabel: 'Load Now',
+    onConfirm: () => {
+      const result = mode.onSuccess(ex, s);
+      saveState();
+      render();
+      alert(`Advanced "${ex.name}"${result && result.message ? ': ' + result.message : '.'}`);
     }
   });
 }
@@ -5624,6 +5719,7 @@ function renderManage() {
         <button class="btn small secondary" onclick="moveExercise(${currentDayIdx}, ${i}, 1)" ${i===day.exercises.length-1?'disabled style="opacity:.35;"':''}>↓</button>
         <button class="btn small secondary" onclick="openExerciseEditor('${ex.id}', ${currentDayIdx})">✏️ Edit</button>
         <button class="btn small secondary" onclick="editExerciseProgress('${ex.id}')">📈 Progress</button>
+        <button class="btn small secondary" onclick="manualLoad('${ex.id}')">⬆ Load</button>
         <button class="btn small secondary" onclick="manualDeload('${ex.id}')">⬇ Deload</button>
         ${ex.supersetGroup
           ? `<button class="btn small secondary" onclick="removeFromSuperset('${ex.id}', ${currentDayIdx})">⚡ Unpair</button>`
@@ -5648,6 +5744,7 @@ function renderManage() {
           <span style="display:flex; gap:6px; flex-wrap:wrap;">
             <button class="btn small secondary" onclick="moveDay(${i}, -1)" ${i===0?'disabled style="opacity:.35;"':''}>↑</button>
             <button class="btn small secondary" onclick="moveDay(${i}, 1)" ${i===DAYS.length-1?'disabled style="opacity:.35;"':''}>↓</button>
+            <button class="btn small secondary" onclick="changeDayIcon(${i})">${d.icon} Icon</button>
             <button class="btn small secondary" onclick="renameDay(${i})">✏️ Rename</button>
             <button class="btn small secondary" onclick="removeDay(${i})">🗑 Delete</button>
           </span>
