@@ -4066,14 +4066,18 @@ function toggleBodyweightLogList() {
 const MEASUREMENT_PARTS = [
   { key: 'neck', label: 'Neck' },
   { key: 'shoulders', label: 'Shoulders' },
-  { key: 'chest', label: 'Chest' },
-  { key: 'lats', label: 'Lats' },
+  { key: 'chestLats', label: 'Chest / Lats' },
   { key: 'waist', label: 'Waist' },
-  { key: 'arms', label: 'Arms' },
-  { key: 'forearms', label: 'Forearms' },
-  { key: 'wrist', label: 'Wrist' },
-  { key: 'thighs', label: 'Thighs' },
-  { key: 'calves', label: 'Calves' },
+  { key: 'armsL', label: 'Left Arm' },
+  { key: 'armsR', label: 'Right Arm' },
+  { key: 'forearmsL', label: 'Left Forearm' },
+  { key: 'forearmsR', label: 'Right Forearm' },
+  { key: 'wristL', label: 'Left Wrist' },
+  { key: 'wristR', label: 'Right Wrist' },
+  { key: 'thighsL', label: 'Left Thigh' },
+  { key: 'thighsR', label: 'Right Thigh' },
+  { key: 'calvesL', label: 'Left Calf' },
+  { key: 'calvesR', label: 'Right Calf' },
 ];
 const CM_PER_IN = 2.54;
 function cmToIn(cm) { return cm / CM_PER_IN; }
@@ -4113,14 +4117,13 @@ function logMeasurements() {
 const MEASURE_DOTS = [
   { key: 'neck', x: 110, y: 56 },
   { key: 'shoulders', x: 68, y: 74 }, { key: 'shoulders', x: 152, y: 74 },
-  { key: 'chest', x: 110, y: 100 },
-  { key: 'lats', x: 72, y: 130 }, { key: 'lats', x: 148, y: 130 },
+  { key: 'chestLats', x: 110, y: 100 },
   { key: 'waist', x: 110, y: 146 },
-  { key: 'arms', x: 52, y: 110 }, { key: 'arms', x: 168, y: 110 },
-  { key: 'forearms', x: 41, y: 182 }, { key: 'forearms', x: 179, y: 182 },
-  { key: 'wrist', x: 38, y: 215 }, { key: 'wrist', x: 182, y: 215 },
-  { key: 'thighs', x: 92, y: 215 }, { key: 'thighs', x: 128, y: 215 },
-  { key: 'calves', x: 88, y: 302 }, { key: 'calves', x: 132, y: 302 },
+  { key: 'armsL', x: 168, y: 110 }, { key: 'armsR', x: 52, y: 110 },
+  { key: 'forearmsL', x: 179, y: 182 }, { key: 'forearmsR', x: 41, y: 182 },
+  { key: 'wristL', x: 182, y: 215 }, { key: 'wristR', x: 38, y: 215 },
+  { key: 'thighsL', x: 128, y: 215 }, { key: 'thighsR', x: 92, y: 215 },
+  { key: 'calvesL', x: 132, y: 302 }, { key: 'calvesR', x: 88, y: 302 },
 ];
 function measureDotColor(key) {
   const todays = getTodaysMeasurementEntry();
@@ -4719,51 +4722,51 @@ function renderProgress() {
       ${volumeByDay}
       <div class="meta" style="margin-top:8px; margin-bottom:0;">Total weight × reps across all weighted exercises in a session — a broader "am I doing more overall" number than any single exercise's chart shows on its own.</div>
     </div>
-    <div class="card" id="pcard-bodyweight">
-      <div class="row" style="align-items:center;">
-        <h3 style="margin:0;">⚖️ Bodyweight</h3>
-        <button class="btn small secondary" onclick="logBodyweight()">+ Log Today</button>
+    <div class="card" id="pcard-measurements">
+      <div class="row" style="align-items:center; flex-wrap:wrap; gap:8px;">
+        <h3 style="margin:0; flex:1;">📐 Body & Measurements</h3>
+        <button class="btn small secondary" onclick="logBodyweight()">+ Weight</button>
+        <button class="btn small secondary" onclick="logMeasurements()">+ Measure</button>
       </div>
       ${(() => {
         const bw = getBodyweightStats();
-        if (!bw) return `<div class="empty" style="padding:10px 0;">Log your bodyweight to start tracking it here.</div>`;
-        const changeText = bw.change30d == null ? ''
-          : bw.change30d === 0 ? ' · flat over 30 days'
-          : ` · ${bw.change30d > 0 ? '+' : ''}${fmtWeight1(bw.change30d)} lb (${bw.change30d > 0 ? '+' : ''}${fmtWeight1(lbToKg(bw.change30d))} kg) over 30 days`;
-        const log = getBodyweightLog();
-        const recentRows = log.slice(-5).reverse().map(e => `
-          <div class="histitem row" style="padding:6px 0;">
-            <span class="meta" style="margin:0;">${new Date(e.date).toLocaleDateString()}: <strong>${bothUnits(e.weight)}</strong></span>
-            <button class="btn small secondary" onclick="deleteBodyweightEntry('${e.date}')">🗑</button>
-          </div>`).join('');
-        return `<div class="meta" style="margin-top:6px;">Latest: <strong>${bothUnits(bw.latest.weight)}</strong> <span style="color:var(--text-faint);">(${new Date(bw.latest.date).toLocaleDateString()})</span>${changeText}</div>
-          <div style="position:relative; height:200px; margin-top:10px;"><canvas id="bodyweightChart"></canvas></div>
-          <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleBodyweightLogList()">📜 Recent entries ${bodyweightLogListOpen ? '▲' : '▼'}</div>
-          <div id="bodyweightLogList" style="display:${bodyweightLogListOpen ? 'block' : 'none'};">${recentRows}</div>`;
-      })()}
-    </div>
-    <div class="card" id="pcard-measurements">
-      <div class="row" style="align-items:center;">
-        <h3 style="margin:0;">📐 Body Measurements</h3>
-        <button class="btn small secondary" onclick="logMeasurements()">+ Log</button>
-      </div>
-      ${(() => {
+        const bwSection = !bw
+          ? `<div class="empty" style="padding:10px 0;">Log your bodyweight to start tracking it here.</div>`
+          : (() => {
+              const changeText = bw.change30d == null ? ''
+                : bw.change30d === 0 ? ' · flat over 30 days'
+                : ` · ${bw.change30d > 0 ? '+' : ''}${fmtWeight1(bw.change30d)} lb (${bw.change30d > 0 ? '+' : ''}${fmtWeight1(lbToKg(bw.change30d))} kg) over 30 days`;
+              const log = getBodyweightLog();
+              const recentRows = log.slice(-5).reverse().map(e => `
+                <div class="histitem row" style="padding:6px 0;">
+                  <span class="meta" style="margin:0;">${new Date(e.date).toLocaleDateString()}: <strong>${bothUnits(e.weight)}</strong></span>
+                  <button class="btn small secondary" onclick="deleteBodyweightEntry('${e.date}')">🗑</button>
+                </div>`).join('');
+              return `<div class="meta" style="margin-top:6px;">⚖️ Latest: <strong>${bothUnits(bw.latest.weight)}</strong> <span style="color:var(--text-faint);">(${new Date(bw.latest.date).toLocaleDateString()})</span>${changeText}</div>
+                <div style="position:relative; height:200px; margin-top:10px;"><canvas id="bodyweightChart"></canvas></div>
+                <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleBodyweightLogList()">📜 Recent weight entries ${bodyweightLogListOpen ? '▲' : '▼'}</div>
+                <div id="bodyweightLogList" style="display:${bodyweightLogListOpen ? 'block' : 'none'};">${recentRows}</div>`;
+            })();
         const ms = getMeasurementsStats();
-        if (!ms) return `<div class="empty" style="padding:10px 0;">Tap "+ Log" to measure yourself against a body diagram — neck, shoulders, chest, lats, waist, arms, forearms, wrists, thighs, calves.</div>`;
-        const log = getMeasurementsLog();
-        const historyRows = log.slice().reverse().slice(0, 8).flatMap(e =>
-          Object.keys(e.values || {}).map(key => {
-            const part = MEASUREMENT_PARTS.find(p => p.key === key);
-            return `<div class="histitem row" style="padding:6px 0;">
-              <span class="meta" style="margin:0;">${new Date(e.date).toLocaleDateString()} · ${part ? part.label : key}: <strong>${bothMeasureUnits(e.values[key])}</strong></span>
-              <button class="btn small secondary" onclick="deleteMeasurementValue('${e.date}','${key}')">🗑</button>
-            </div>`;
-          })
-        ).join('');
-        return `<div class="meta" style="margin-top:6px;">${ms.loggedCount} of ${ms.totalCount} body parts tracked${ms.mostRecentDate ? ` · last logged ${new Date(ms.mostRecentDate).toLocaleDateString()}` : ''}</div>
-          ${measurementsGridHtml()}
-          <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleMeasurementsHistory()">📜 Recent entries ${measurementsHistoryOpen ? '▲' : '▼'}</div>
-          <div id="measurementsHistoryList" style="display:${measurementsHistoryOpen ? 'block' : 'none'};">${historyRows || '<div class="empty" style="padding:8px 0;">No entries yet.</div>'}</div>`;
+        const msSection = !ms
+          ? `<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
+          : (() => {
+              const log = getMeasurementsLog();
+              const historyRows = log.slice().reverse().slice(0, 8).flatMap(e =>
+                Object.keys(e.values || {}).map(key => {
+                  const part = MEASUREMENT_PARTS.find(p => p.key === key);
+                  return `<div class="histitem row" style="padding:6px 0;">
+                    <span class="meta" style="margin:0;">${new Date(e.date).toLocaleDateString()} · ${part ? part.label : key}: <strong>${bothMeasureUnits(e.values[key])}</strong></span>
+                    <button class="btn small secondary" onclick="deleteMeasurementValue('${e.date}','${key}')">🗑</button>
+                  </div>`;
+                })
+              ).join('');
+              return `<div class="meta" style="margin-top:6px;">📐 ${ms.loggedCount} of ${ms.totalCount} measurements tracked${ms.mostRecentDate ? ` · last logged ${new Date(ms.mostRecentDate).toLocaleDateString()}` : ''}</div>
+                ${measurementsGridHtml()}
+                <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleMeasurementsHistory()">📜 Recent measurement entries ${measurementsHistoryOpen ? '▲' : '▼'}</div>
+                <div id="measurementsHistoryList" style="display:${measurementsHistoryOpen ? 'block' : 'none'};">${historyRows || '<div class="empty" style="padding:8px 0;">No entries yet.</div>'}</div>`;
+            })();
+        return `${bwSection}<div style="border-top:1px solid var(--border-strong); margin:14px 0;"></div>${msSection}`;
       })()}
     </div>
     <div class="card" id="pcard-duration-radar">
