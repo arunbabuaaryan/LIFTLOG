@@ -497,6 +497,22 @@
     border: 1.5px solid var(--border-strong); color: var(--text); font-size: 14px; margin-top: 10px;
     box-sizing: border-box;
   }
+  /* Body measurements diagram */
+  .measure-modal { max-width: 420px; }
+  .measure-svg-wrap { display: flex; justify-content: center; margin: 12px 0; }
+  .measure-dot { cursor: pointer; stroke: var(--bg); stroke-width: 2; transition: r .12s ease; }
+  .measure-dot:active { opacity: .8; }
+  .measure-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 10px;
+  }
+  .measure-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
+    padding: 7px 9px; border-radius: 8px; background: var(--surface-raised);
+    border: 1px solid var(--border-strong); cursor: pointer; font-size: 12.5px;
+  }
+  .measure-row .mlabel { color: var(--text-dim); }
+  .measure-row .mval { color: var(--text); font-weight: 600; }
+  .measure-row .mval.empty { color: var(--text-faint); font-weight: 400; }
   .btn.danger { background: var(--danger); }
 
   /* Emoji picker grid, used for choosing a workout day's icon */
@@ -4040,6 +4056,240 @@ function toggleBodyweightLogList() {
   if (el) el.style.display = bodyweightLogListOpen ? 'block' : 'none';
 }
 
+// ---------- BODY MEASUREMENTS TRACKING ----------
+// Same one-entry-per-calendar-date pattern as bodyweight, but each entry
+// holds a `values` object keyed by body part, since a person taps one part
+// at a time on the diagram rather than filling in everything at once.
+// Values are always stored canonically in cm; `state.measurementsUnit` just
+// records which unit was last used so inputs default sensibly. Display
+// always shows both units, same as bodyweight's bothUnits().
+const MEASUREMENT_PARTS = [
+  { key: 'neck', label: 'Neck' },
+  { key: 'shoulders', label: 'Shoulders' },
+  { key: 'chest', label: 'Chest' },
+  { key: 'lats', label: 'Lats' },
+  { key: 'waist', label: 'Waist' },
+  { key: 'arms', label: 'Arms' },
+  { key: 'forearms', label: 'Forearms' },
+  { key: 'wrist', label: 'Wrist' },
+  { key: 'thighs', label: 'Thighs' },
+  { key: 'calves', label: 'Calves' },
+];
+const CM_PER_IN = 2.54;
+function cmToIn(cm) { return cm / CM_PER_IN; }
+function inToCm(inch) { return inch * CM_PER_IN; }
+function fmtMeasure1(n) { return Math.round(n * 10) / 10; }
+function bothMeasureUnits(cm) { return `${fmtMeasure1(cm)} cm (${fmtMeasure1(cmToIn(cm))} in)`; }
+
+function getMeasurementsLog() {
+  return (state.measurementsLog || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+function getTodaysMeasurementEntry() {
+  const today = dateStr(new Date());
+  return (state.measurementsLog || []).find(e => dateStr(e.date) === today) || null;
+}
+function getLatestMeasurementValue(key) {
+  const log = getMeasurementsLog();
+  for (let i = log.length - 1; i >= 0; i--) {
+    if (log[i].values && log[i].values[key] != null) return { value: log[i].values[key], date: log[i].date };
+  }
+  return null;
+}
+function getMeasurementsStats() {
+  const log = getMeasurementsLog();
+  const loggedParts = MEASUREMENT_PARTS.filter(p => getLatestMeasurementValue(p.key));
+  if (!loggedParts.length) return null;
+  const mostRecentDate = log.length ? log[log.length - 1].date : null;
+  return { loggedCount: loggedParts.length, totalCount: MEASUREMENT_PARTS.length, mostRecentDate };
+}
+
+function logMeasurements() {
+  openMeasurementsDiagramModal();
+}
+
+// Coordinates for the tappable dots, laid out over a simple front-view
+// silhouette built from stroked shapes (head/neck/torso solids, thick
+// rounded-linecap strokes for limbs). viewBox is 0 0 260 400.
+const MEASURE_DOTS = [
+  { key: 'neck', x: 110, y: 56 },
+  { key: 'shoulders', x: 68, y: 74 }, { key: 'shoulders', x: 152, y: 74 },
+  { key: 'chest', x: 110, y: 100 },
+  { key: 'lats', x: 72, y: 130 }, { key: 'lats', x: 148, y: 130 },
+  { key: 'waist', x: 110, y: 146 },
+  { key: 'arms', x: 52, y: 110 }, { key: 'arms', x: 168, y: 110 },
+  { key: 'forearms', x: 41, y: 182 }, { key: 'forearms', x: 179, y: 182 },
+  { key: 'wrist', x: 38, y: 215 }, { key: 'wrist', x: 182, y: 215 },
+  { key: 'thighs', x: 92, y: 215 }, { key: 'thighs', x: 128, y: 215 },
+  { key: 'calves', x: 88, y: 302 }, { key: 'calves', x: 132, y: 302 },
+];
+function measureDotColor(key) {
+  const todays = getTodaysMeasurementEntry();
+  if (todays && todays.values && todays.values[key] != null) return 'var(--success)';
+  if (getLatestMeasurementValue(key)) return 'var(--accent)';
+  return 'var(--surface-raised)';
+}
+function bodyDiagramSvg() {
+  const dots = MEASURE_DOTS.map(d =>
+    `<circle class="measure-dot" cx="${d.x}" cy="${d.y}" r="9" fill="${measureDotColor(d.key)}"
+      onclick="openMeasurementPartModal('${d.key}')"><title>${MEASUREMENT_PARTS.find(p => p.key === d.key).label}</title></circle>`
+  ).join('');
+  return `
+  <svg viewBox="0 0 260 400" width="180" height="277" xmlns="http://www.w3.org/2000/svg">
+    <g fill="var(--surface-raised)" stroke="var(--border-strong)" stroke-width="2">
+      <circle cx="110" cy="30" r="22"/>
+      <rect x="100" y="48" width="20" height="16" rx="5"/>
+      <polygon points="68,66 152,66 145,95 138,150 148,172 72,172 82,150 75,95"/>
+      <ellipse cx="80" cy="352" rx="16" ry="8"/>
+      <ellipse cx="140" cy="352" rx="16" ry="8"/>
+    </g>
+    <g fill="none" stroke="var(--surface-raised)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="68,72 45,150 38,215"/>
+      <polyline points="152,72 175,150 182,215"/>
+    </g>
+    <g fill="var(--surface-raised)" stroke="var(--border-strong)" stroke-width="2">
+      <circle cx="36" cy="224" r="11"/>
+      <circle cx="184" cy="224" r="11"/>
+    </g>
+    <g fill="none" stroke="var(--surface-raised)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="95,172 90,260 86,345"/>
+      <polyline points="125,172 130,260 134,345"/>
+    </g>
+    <g fill="none" stroke="var(--border-strong)" stroke-width="1.5">
+      <polyline points="68,72 45,150 38,215"/>
+      <polyline points="152,72 175,150 182,215"/>
+      <polyline points="95,172 90,260 86,345"/>
+      <polyline points="125,172 130,260 134,345"/>
+    </g>
+    ${dots}
+  </svg>`;
+}
+function measurementsGridHtml() {
+  return `<div class="measure-grid">${MEASUREMENT_PARTS.map(p => {
+    const latest = getLatestMeasurementValue(p.key);
+    return `<div class="measure-row" onclick="openMeasurementPartModal('${p.key}')">
+      <span class="mlabel">${p.label}</span>
+      <span class="mval ${latest ? '' : 'empty'}">${latest ? fmtMeasure1(latest.value) + ' cm' : '—'}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+function openMeasurementsDiagramModal() {
+  const existing = document.getElementById('measureDiagramOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'measureDiagramOverlay';
+  overlay.innerHTML = `
+    <div class="confirm-modal measure-modal" style="max-height:85vh; overflow-y:auto;">
+      <h3>📐 Body Measurements</h3>
+      <div class="meta" style="margin-bottom:0;">Tap a point on the body to log that measurement, or use the list below.</div>
+      <div class="measure-svg-wrap">${bodyDiagramSvg()}</div>
+      ${measurementsGridHtml()}
+      <div class="row" style="margin-top:16px;">
+        <button class="btn secondary" id="measureCloseBtn" style="flex:1;">Done</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#measureCloseBtn').onclick = () => { close(); render(); };
+  overlay.addEventListener('click', e => { if (e.target === overlay) { close(); render(); } });
+}
+function refreshMeasurementsDiagramModal() {
+  if (document.getElementById('measureDiagramOverlay')) openMeasurementsDiagramModal();
+}
+function openMeasurementPartModal(partKey) {
+  const part = MEASUREMENT_PARTS.find(p => p.key === partKey);
+  if (!part) return;
+  const latest = getLatestMeasurementValue(partKey);
+  const todaysEntry = getTodaysMeasurementEntry();
+  const todaysVal = todaysEntry && todaysEntry.values ? todaysEntry.values[partKey] : null;
+  let unit = state.measurementsUnit === 'in' ? 'in' : 'cm';
+
+  const valueFor = (u) => {
+    const cm = todaysVal != null ? todaysVal : (latest ? latest.value : null);
+    if (cm == null) return '';
+    return fmtMeasure1(u === 'in' ? cmToIn(cm) : cm);
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.style.zIndex = 210;
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <h3>${part.label}</h3>
+      <div class="meta" style="margin-bottom:0;">${latest ? `Last logged: <strong>${bothMeasureUnits(latest.value)}</strong> (${new Date(latest.date).toLocaleDateString()})` : 'No measurements logged yet.'}</div>
+      <div class="row" style="align-items:center; gap:8px; margin-top:12px;">
+        <input type="number" inputmode="decimal" step="0.1" min="1" class="confirm-input" id="measureInputField"
+          placeholder="${part.label}" value="${valueFor(unit)}" style="flex:1; margin-top:0;">
+        <div class="row" style="gap:4px;">
+          <button class="btn small ${unit === 'cm' ? '' : 'secondary'}" id="measureUnitCmBtn">cm</button>
+          <button class="btn small ${unit === 'in' ? '' : 'secondary'}" id="measureUnitInBtn">in</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px; gap:8px;">
+        <button class="btn secondary" id="measureCancelBtn" style="flex:1;">Cancel</button>
+        <button class="btn" id="measureSaveBtn" style="flex:1;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  const field = overlay.querySelector('#measureInputField');
+  const cmBtn = overlay.querySelector('#measureUnitCmBtn');
+  const inBtn = overlay.querySelector('#measureUnitInBtn');
+
+  const setUnit = (u) => {
+    unit = u;
+    cmBtn.className = `btn small ${unit === 'cm' ? '' : 'secondary'}`;
+    inBtn.className = `btn small ${unit === 'in' ? '' : 'secondary'}`;
+    field.value = valueFor(unit);
+  };
+  cmBtn.onclick = () => setUnit('cm');
+  inBtn.onclick = () => setUnit('in');
+
+  overlay.querySelector('#measureCancelBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#measureSaveBtn').onclick = () => {
+    const n = parseFloat(field.value);
+    if (isNaN(n) || n <= 0) { field.style.borderColor = 'var(--danger)'; field.focus(); return; }
+    const cmValue = unit === 'in' ? inToCm(n) : n;
+    state.measurementsLog = state.measurementsLog || [];
+    state.measurementsUnit = unit;
+    const today = dateStr(new Date());
+    let entry = state.measurementsLog.find(e => dateStr(e.date) === today);
+    if (!entry) { entry = { date: new Date().toISOString(), values: {} }; state.measurementsLog.push(entry); }
+    entry.values = entry.values || {};
+    entry.values[partKey] = fmtMeasure1(cmValue);
+    saveState();
+    close();
+    refreshMeasurementsDiagramModal();
+    render();
+  };
+  setTimeout(() => field.focus(), 50);
+}
+function deleteMeasurementValue(dateIso, partKey) {
+  const entry = (state.measurementsLog || []).find(e => e.date === dateIso);
+  if (!entry || !entry.values) return;
+  showConfirm({
+    title: 'Delete this measurement?',
+    message: `Removes the ${MEASUREMENT_PARTS.find(p => p.key === partKey)?.label || partKey} entry from ${new Date(dateIso).toLocaleDateString()}.`,
+    confirmLabel: 'Delete',
+    danger: true,
+    onConfirm: () => {
+      delete entry.values[partKey];
+      if (Object.keys(entry.values).length === 0) {
+        state.measurementsLog = state.measurementsLog.filter(e => e.date !== dateIso);
+      }
+      saveState();
+      refreshMeasurementsDiagramModal();
+      render();
+    }
+  });
+}
+let measurementsHistoryOpen = false;
+function toggleMeasurementsHistory() {
+  measurementsHistoryOpen = !measurementsHistoryOpen;
+  const el = document.getElementById('measurementsHistoryList');
+  if (el) el.style.display = measurementsHistoryOpen ? 'block' : 'none';
+}
 
 function getMuscleGroupVolumeStats(dayLabel) {
   const day = DAYS.find(d => d.label === dayLabel);
@@ -4490,6 +4740,30 @@ function renderProgress() {
           <div style="position:relative; height:200px; margin-top:10px;"><canvas id="bodyweightChart"></canvas></div>
           <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleBodyweightLogList()">📜 Recent entries ${bodyweightLogListOpen ? '▲' : '▼'}</div>
           <div id="bodyweightLogList" style="display:${bodyweightLogListOpen ? 'block' : 'none'};">${recentRows}</div>`;
+      })()}
+    </div>
+    <div class="card" id="pcard-measurements">
+      <div class="row" style="align-items:center;">
+        <h3 style="margin:0;">📐 Body Measurements</h3>
+        <button class="btn small secondary" onclick="logMeasurements()">+ Log</button>
+      </div>
+      ${(() => {
+        const ms = getMeasurementsStats();
+        if (!ms) return `<div class="empty" style="padding:10px 0;">Tap "+ Log" to measure yourself against a body diagram — neck, shoulders, chest, lats, waist, arms, forearms, wrists, thighs, calves.</div>`;
+        const log = getMeasurementsLog();
+        const historyRows = log.slice().reverse().slice(0, 8).flatMap(e =>
+          Object.keys(e.values || {}).map(key => {
+            const part = MEASUREMENT_PARTS.find(p => p.key === key);
+            return `<div class="histitem row" style="padding:6px 0;">
+              <span class="meta" style="margin:0;">${new Date(e.date).toLocaleDateString()} · ${part ? part.label : key}: <strong>${bothMeasureUnits(e.values[key])}</strong></span>
+              <button class="btn small secondary" onclick="deleteMeasurementValue('${e.date}','${key}')">🗑</button>
+            </div>`;
+          })
+        ).join('');
+        return `<div class="meta" style="margin-top:6px;">${ms.loggedCount} of ${ms.totalCount} body parts tracked${ms.mostRecentDate ? ` · last logged ${new Date(ms.mostRecentDate).toLocaleDateString()}` : ''}</div>
+          ${measurementsGridHtml()}
+          <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleMeasurementsHistory()">📜 Recent entries ${measurementsHistoryOpen ? '▲' : '▼'}</div>
+          <div id="measurementsHistoryList" style="display:${measurementsHistoryOpen ? 'block' : 'none'};">${historyRows || '<div class="empty" style="padding:8px 0;">No entries yet.</div>'}</div>`;
       })()}
     </div>
     <div class="card" id="pcard-duration-radar">
@@ -4945,17 +5219,18 @@ function resetAllData() {
       const keepDays = DAYS;
       const keepDriveSync = state.driveSync;
       const keepBodyweightLog = state.bodyweightLog;
+      const keepMeasurementsLog = state.measurementsLog;
       const keepPlans = state.plans;
       const keepActivePlanId = state.activePlanId;
       const keepActivePlanName = state.activePlanName;
       state = {
         version: SCHEMA_VERSION, exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays, driveSync: keepDriveSync,
-        bodyweightLog: keepBodyweightLog, plans: keepPlans, activePlanId: keepActivePlanId, activePlanName: keepActivePlanName,
+        bodyweightLog: keepBodyweightLog, measurementsLog: keepMeasurementsLog, plans: keepPlans, activePlanId: keepActivePlanId, activePlanName: keepActivePlanName,
       };
       saveState();
       liveSets = {};
       currentDayIdx = 0;
-      alert('All data reset. Exercise list, bodyweight log, saved plans, and Drive connection were kept.');
+      alert('All data reset. Exercise list, bodyweight log, body measurements, saved plans, and Drive connection were kept.');
       setView('workout');
     }
   });
