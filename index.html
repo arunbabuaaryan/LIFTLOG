@@ -600,6 +600,24 @@
     border-radius: 10px; padding: 9px 11px; margin-bottom: 10px; font-size: 12.5px;
   }
   .btn.danger { background: var(--danger); }
+  .photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+  .photo-thumb {
+    position: relative; aspect-ratio: 3/4; border-radius: 10px; background-size: cover;
+    background-position: center; cursor: pointer; border: 1px solid var(--border-strong); overflow: hidden;
+  }
+  .photo-thumb-date {
+    position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,.7));
+    color: #fff; font-size: 10px; padding: 3px 5px 4px; text-align: center;
+  }
+  .compare-wrap {
+    position: relative; width: 100%; aspect-ratio: 3/4; border-radius: 12px;
+    overflow: hidden; background: var(--surface-raised);
+  }
+  .compare-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .compare-handle {
+    position: absolute; top: 0; bottom: 0; width: 3px; background: #fff;
+    box-shadow: 0 0 6px rgba(0,0,0,.5); transform: translateX(-50%); pointer-events: none;
+  }
 
   /* Emoji picker grid, used for choosing a workout day's icon */
   .emoji-grid {
@@ -1509,6 +1527,7 @@ function escapeHtml(str) {
 function showConfirm({ title, message, confirmLabel = 'Confirm', danger = false, requireText = null, onConfirm }) {
   const overlay = document.createElement('div');
   overlay.className = 'confirm-overlay';
+  overlay.style.zIndex = 300;
   overlay.innerHTML = `
     <div class="confirm-modal">
       <h3>${escapeHtml(title)}</h3>
@@ -4290,6 +4309,167 @@ function getSymmetryChecks() {
   });
 }
 
+// ---------- PROGRESS PHOTOS ----------
+// Stored as compressed JPEG data URLs directly in state (there's no backend
+// — everything lives in localStorage and rides along in the normal JSON
+// backup/export). Compression keeps each photo small since localStorage
+// has a hard quota (~5-10MB depending on the browser) shared with all the
+// rest of the app's data.
+const PROGRESS_PHOTO_MAX_DIM = 900;
+const PROGRESS_PHOTO_QUALITY = 0.72;
+function getProgressPhotos() {
+  return (state.progressPhotos || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+function getProgressPhotosStorageBytes() {
+  return (state.progressPhotos || []).reduce((sum, p) => sum + (p.dataUrl ? p.dataUrl.length * 0.75 : 0), 0);
+}
+function fmtBytes(bytes) {
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+function compressImageToDataUrl(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+        else if (height >= width && height > maxDim) { width = Math.round(width * (maxDim / height)); height = maxDim; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('Could not read that image'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('Could not read that file'));
+    reader.readAsDataURL(file);
+  });
+}
+function addProgressPhotoFromInput(inputEl) {
+  const file = inputEl.files && inputEl.files[0];
+  inputEl.value = '';
+  if (!file) return;
+  compressImageToDataUrl(file, PROGRESS_PHOTO_MAX_DIM, PROGRESS_PHOTO_QUALITY).then(dataUrl => {
+    state.progressPhotos = state.progressPhotos || [];
+    state.progressPhotos.push({ id: 'p' + Date.now() + Math.random().toString(36).slice(2, 7), date: new Date().toISOString(), dataUrl });
+    saveState();
+    render();
+  }).catch(() => alert("Couldn't process that photo — try a different one."));
+}
+function deleteProgressPhoto(id) {
+  showConfirm({
+    title: 'Delete this photo?',
+    message: 'Removes it permanently from this device (and from any future backup).',
+    confirmLabel: 'Delete',
+    danger: true,
+    onConfirm: () => {
+      state.progressPhotos = (state.progressPhotos || []).filter(p => p.id !== id);
+      saveState();
+      const overlay = document.getElementById('photoViewOverlay');
+      if (overlay) overlay.remove();
+      render();
+    }
+  });
+}
+function progressPhotosGridHtml() {
+  const photos = getProgressPhotos().slice().reverse();
+  if (!photos.length) return `<div class="empty" style="padding:10px 0;">No progress photos yet — tap "+ Add Photo" to start a visual record.</div>`;
+  return `<div class="photo-grid">${photos.map(p => `
+    <div class="photo-thumb" style="background-image:url('${p.dataUrl}');" onclick="openPhotoViewModal('${p.id}')">
+      <span class="photo-thumb-date">${new Date(p.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+    </div>`).join('')}</div>`;
+}
+function openPhotoViewModal(id) {
+  const photo = getProgressPhotos().find(p => p.id === id);
+  if (!photo) return;
+  const existing = document.getElementById('photoViewOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'photoViewOverlay';
+  overlay.style.zIndex = 215;
+  overlay.innerHTML = `
+    <div class="confirm-modal" style="max-width:420px; padding:12px;">
+      <img src="${photo.dataUrl}" style="width:100%; border-radius:12px; display:block;" alt="Progress photo">
+      <div class="row" style="margin-top:10px; align-items:center;">
+        <span class="meta" style="margin:0; flex:1;">${new Date(photo.date).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}</span>
+        <button class="btn small secondary" onclick="deleteProgressPhoto('${photo.id}')">🗑 Delete</button>
+      </div>
+      <button class="btn secondary" style="margin-top:10px; width:100%;" id="photoViewCloseBtn">Close</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#photoViewCloseBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+}
+function updateCompareSlider(val) {
+  const img = document.getElementById('compareBeforeImg');
+  const handle = document.getElementById('compareHandle');
+  if (img) img.style.clipPath = `inset(0 ${100 - val}% 0 0)`;
+  if (handle) handle.style.left = val + '%';
+}
+function openPhotoCompareModal() {
+  const photos = getProgressPhotos();
+  if (photos.length < 2) return;
+  let beforeId = photos[0].id;
+  let afterId = photos[photos.length - 1].id;
+  const existing = document.getElementById('photoCompareOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'photoCompareOverlay';
+  overlay.style.zIndex = 215;
+  const renderBody = () => {
+    const before = photos.find(p => p.id === beforeId);
+    const after = photos.find(p => p.id === afterId);
+    return `
+      <div class="row" style="gap:8px;">
+        <select id="compareBeforeSelect" class="confirm-input" style="flex:1; margin-top:0;">
+          ${photos.map(p => `<option value="${p.id}" ${p.id === beforeId ? 'selected' : ''}>${new Date(p.date).toLocaleDateString()}</option>`).join('')}
+        </select>
+        <select id="compareAfterSelect" class="confirm-input" style="flex:1; margin-top:0;">
+          ${photos.map(p => `<option value="${p.id}" ${p.id === afterId ? 'selected' : ''}>${new Date(p.date).toLocaleDateString()}</option>`).join('')}
+        </select>
+      </div>
+      <div class="compare-wrap" style="margin-top:12px;">
+        <img class="compare-img" src="${after.dataUrl}" alt="After">
+        <img class="compare-img" id="compareBeforeImg" src="${before.dataUrl}" style="clip-path: inset(0 50% 0 0);" alt="Before">
+        <div class="compare-handle" id="compareHandle" style="left:50%;"></div>
+      </div>
+      <input type="range" min="0" max="100" value="50" style="width:100%; margin-top:10px;" oninput="updateCompareSlider(this.value)">
+      <div class="row" style="margin-top:2px;">
+        <span class="meta" style="margin:0;">◀ Before</span>
+        <span class="meta" style="margin:0; margin-left:auto;">After ▶</span>
+      </div>`;
+  };
+  const rewire = () => {
+    overlay.querySelector('#compareBeforeSelect').onchange = (e) => {
+      beforeId = e.target.value;
+      overlay.querySelector('#compareBody').innerHTML = renderBody();
+      rewire();
+    };
+    overlay.querySelector('#compareAfterSelect').onchange = (e) => {
+      afterId = e.target.value;
+      overlay.querySelector('#compareBody').innerHTML = renderBody();
+      rewire();
+    };
+  };
+  overlay.innerHTML = `<div class="confirm-modal" style="max-width:420px;">
+    <h3>🔀 Compare Photos</h3>
+    <div id="compareBody">${renderBody()}</div>
+    <button class="btn secondary" style="margin-top:14px; width:100%;" id="compareCloseBtn">Close</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#compareCloseBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  rewire();
+}
+
 // ---------- BODY FAT % (U.S. Navy method) ----------
 // Needs height (stored once, edited rarely) plus neck + waist (+ hips for
 // women). Uses whatever the latest logged value of each is, even if they
@@ -5349,15 +5529,18 @@ function renderProgress() {
             })();
         const bf = getBodyFatEstimate();
         const height = getUserHeightCm();
+        const heightRow = `<div class="measure-row" style="margin-top:6px; cursor:pointer;" onclick="openHeightModal()">
+             <span class="mlabel">📏 Height</span>
+             <span class="mval-wrap"><span class="mval ${height ? '' : 'empty'}">${height ? fmtMeasure1(height) + ' cm' : 'Add height'}</span></span>
+           </div>`;
         const bfSection = bf
-          ? `<div class="meta" style="margin-top:6px; cursor:pointer;" onclick="openBodyFatTrendModal()">
+          ? `<div class="meta" style="margin-top:8px; cursor:pointer;" onclick="openBodyFatTrendModal()">
                📉 Body Fat (Navy method): <strong>${bf.pct}%</strong>
                <span style="color:var(--text-faint);">${bf.mixedDates ? '(from latest logged values)' : `(as of ${new Date(bf.asOf).toLocaleDateString()})`}</span>
                · <span style="text-decoration:underline;">view trend</span>
-             </div>
-             <div class="meta" style="margin-top:2px; cursor:pointer;" onclick="openHeightModal()">Height: ${fmtMeasure1(height)} cm <span style="text-decoration:underline;">edit</span></div>`
-          : `<div class="meta" style="margin-top:6px;">
-               📉 Body Fat %: ${!height ? `set your <span style="text-decoration:underline; cursor:pointer;" onclick="openHeightModal()">height</span> and log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate` : `log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate`}
+             </div>`
+          : `<div class="meta" style="margin-top:8px;">
+               📉 Body Fat %: ${!height ? `set your height above and log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate` : `log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate`}
              </div>`;
         const symmetry = getSymmetryChecks().filter(s => s.available);
         const symmetrySection = symmetry.length ? `
@@ -5371,7 +5554,7 @@ function renderProgress() {
             </div>`).join('')}</div>` : '';
         const ms = getMeasurementsStats();
         const msSection = !ms
-          ? `<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, hips, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
+          ? `${heightRow}<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, hips, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
           : (() => {
               const log = getMeasurementsLog();
               const historyRows = log.slice().reverse().slice(0, 8).flatMap(e =>
@@ -5384,6 +5567,7 @@ function renderProgress() {
                 })
               ).join('');
               return `<div class="meta" style="margin-top:6px;">📐 ${ms.loggedCount} of ${ms.totalCount} measurements tracked${ms.mostRecentDate ? ` · last logged ${new Date(ms.mostRecentDate).toLocaleDateString()}` : ''}</div>
+                ${heightRow}
                 ${bfSection}
                 ${measurementsGridHtml()}
                 ${symmetrySection}
@@ -5392,6 +5576,16 @@ function renderProgress() {
             })();
         return `${bwSection}<div style="border-top:1px solid var(--border-strong); margin:14px 0;"></div>${msSection}`;
       })()}` : ''}
+    </div>
+    <div class="card" id="pcard-photos">
+      ${collapsibleHeader('pcard-photos', '📸 Progress Photos', true,
+        `<label class="btn small secondary" style="margin:0;" onclick="event.stopPropagation();">+ Add Photo
+           <input type="file" accept="image/*" style="display:none;" onchange="addProgressPhotoFromInput(this)">
+         </label>
+         ${getProgressPhotos().length >= 2 ? `<button class="btn small secondary" onclick="event.stopPropagation(); openPhotoCompareModal();">🔀 Compare</button>` : ''}`)}
+      ${isCardExpanded('pcard-photos', true) ? `
+      ${progressPhotosGridHtml()}
+      ${getProgressPhotos().length ? `<div class="meta" style="margin-top:10px; margin-bottom:0;">📦 ${getProgressPhotos().length} photo${getProgressPhotos().length !== 1 ? 's' : ''} · ~${fmtBytes(getProgressPhotosStorageBytes())} stored on this device. Photos are saved locally and included in your backup export — back up periodically so they're never only in one place.</div>` : ''}` : ''}
     </div>
     <div class="card" id="pcard-duration-radar">
       ${collapsibleHeader('pcard-duration-radar', `🕸️ Recent Pace <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(avg of last ${getRadarSessionCount()} workouts per group)</span>`, false,
@@ -5847,17 +6041,22 @@ function resetAllData() {
       const keepDriveSync = state.driveSync;
       const keepBodyweightLog = state.bodyweightLog;
       const keepMeasurementsLog = state.measurementsLog;
+      const keepProgressPhotos = state.progressPhotos;
+      const keepUserHeightCm = state.userHeightCm;
+      const keepMeasurementGoals = state.measurementGoals;
       const keepPlans = state.plans;
       const keepActivePlanId = state.activePlanId;
       const keepActivePlanName = state.activePlanName;
       state = {
         version: SCHEMA_VERSION, exercises: {}, history: [], prs: [], meta: {}, sessionStarts: {}, customDays: keepDays, driveSync: keepDriveSync,
-        bodyweightLog: keepBodyweightLog, measurementsLog: keepMeasurementsLog, plans: keepPlans, activePlanId: keepActivePlanId, activePlanName: keepActivePlanName,
+        bodyweightLog: keepBodyweightLog, measurementsLog: keepMeasurementsLog, progressPhotos: keepProgressPhotos,
+        userHeightCm: keepUserHeightCm, measurementGoals: keepMeasurementGoals,
+        plans: keepPlans, activePlanId: keepActivePlanId, activePlanName: keepActivePlanName,
       };
       saveState();
       liveSets = {};
       currentDayIdx = 0;
-      alert('All data reset. Exercise list, bodyweight log, body measurements, saved plans, and Drive connection were kept.');
+      alert('All data reset. Exercise list, bodyweight log, body measurements, progress photos, saved plans, and Drive connection were kept.');
       setView('workout');
     }
   });
