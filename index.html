@@ -377,6 +377,12 @@
     border: 1px solid var(--border); box-shadow: var(--card-shadow);
   }
   .card h3 { margin: 0 0 6px 0; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
+  .card-toggle-header { align-items: center; cursor: pointer; user-select: none; margin-bottom: 6px; }
+  .card-toggle-header h3 { margin-bottom: 0; }
+  .card-pin { font-size: 13px; opacity: .28; padding: 2px 5px; transition: opacity .15s ease, transform .1s ease; flex-shrink: 0; }
+  .card-pin.pinned { opacity: 1; }
+  .card-pin:active { transform: scale(.82); }
+  .card-chevron { font-size: 12px; color: var(--text-faint); padding: 2px 0 2px 4px; flex-shrink: 0; }
   .meta { font-size: 12.5px; color: var(--text-dim); margin-bottom: 10px; }
   .livectrl { display: flex; align-items: center; gap: 6px; }
   .livectrl-label { font-size: 11px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
@@ -509,6 +515,11 @@
   .histitem:last-child { border-bottom: none; }
   #testModeBanner {
     background: repeating-linear-gradient(45deg, #7a2e00, #7a2e00 10px, #8f3800 10px, #8f3800 20px);
+    color: #fff; text-align: center; font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
+    padding: 8px; position: sticky; top: 0; z-index: 9;
+  }
+  #editDefaultsBanner {
+    background: repeating-linear-gradient(45deg, #2d2470, #2d2470 10px, #382d87 10px, #382d87 20px);
     color: #fff; text-align: center; font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
     padding: 8px; position: sticky; top: 0; z-index: 9;
   }
@@ -690,6 +701,7 @@
 
 <header><h1>LiftLog <span id="streakBadge"></span> <button class="gearbtn" onclick="setView('manage')">⚙</button></h1></header>
 <div id="testModeBanner" style="display:none;"></div>
+<div id="editDefaultsBanner" style="display:none;"></div>
 
 <div id="app"></div>
 
@@ -769,6 +781,19 @@ const STORE_KEY = 'liftlog_v1';
 const TEST_STORE_KEY = 'liftlog_v1_test';
 const TEST_MODE_FLAG = 'liftlog_test_mode_active';
 const THEME_KEY = 'liftlog_theme';
+const EDIT_DEFAULTS_FLAG = 'liftlog_edit_defaults_mode';
+function isEditDefaultsMode() { return localStorage.getItem(EDIT_DEFAULTS_FLAG) === '1'; }
+function setEditDefaultsMode(on) {
+  localStorage.setItem(EDIT_DEFAULTS_FLAG, on ? '1' : '0');
+  updateEditDefaultsBanner();
+  render();
+}
+function updateEditDefaultsBanner() {
+  const banner = document.getElementById('editDefaultsBanner');
+  if (!banner) return;
+  banner.style.display = isEditDefaultsMode() ? 'block' : 'none';
+  banner.textContent = '🧰 EDIT DEFAULTS MODE — tap 📌 on any card to set whether it starts expanded or collapsed';
+}
 
 // ---------- SCHEMA MIGRATIONS ----------
 // The current shape of saved state. Bump this by 1 and add a matching entry
@@ -869,6 +894,52 @@ function setTheme(t) {
   localStorage.setItem(THEME_KEY, t);
   applyTheme(t);
   render();
+}
+
+// ---------- COLLAPSIBLE CARDS ----------
+// Less-frequently-checked cards (secondary stats, settings, backup tools)
+// can collapse to cut down scrolling. Each card has a persisted DEFAULT
+// (expanded/collapsed), toggled via the small pin icon in its header, plus
+// a runtime override — tapping the header itself just peeks at a card for
+// this session without changing what you see next time you open the app.
+let cardRuntimeOverrides = {};
+function isCardDefaultExpanded(cardId, fallback) {
+  const v = localStorage.getItem('liftlog_card_default_' + cardId);
+  if (v == null) return fallback;
+  return v === '1';
+}
+function setCardDefaultExpanded(cardId, expanded) {
+  localStorage.setItem('liftlog_card_default_' + cardId, expanded ? '1' : '0');
+}
+function isCardExpanded(cardId, fallback) {
+  if (Object.prototype.hasOwnProperty.call(cardRuntimeOverrides, cardId)) return cardRuntimeOverrides[cardId];
+  return isCardDefaultExpanded(cardId, fallback);
+}
+function toggleCardRuntime(cardId, fallback) {
+  cardRuntimeOverrides[cardId] = !isCardExpanded(cardId, fallback);
+  render();
+}
+function toggleCardPin(cardId, fallback) {
+  setCardDefaultExpanded(cardId, !isCardDefaultExpanded(cardId, fallback));
+  render();
+}
+// Standard clickable header for a collapsible card: title, optional extra
+// controls (already-wired HTML, e.g. a rename icon — pass with its own
+// event.stopPropagation() so it doesn't also toggle the card), a pin to
+// set the default, and a chevron showing current state.
+function collapsibleHeader(cardId, titleHtml, fallback, extraHtml) {
+  const expanded = isCardExpanded(cardId, fallback);
+  const pinned = isCardDefaultExpanded(cardId, fallback);
+  const pin = isEditDefaultsMode()
+    ? `<span class="card-pin ${pinned ? 'pinned' : ''}" onclick="event.stopPropagation(); toggleCardPin('${cardId}', ${fallback})"
+        title="${pinned ? 'Expanded by default — tap to make it tap-to-expand instead' : 'Tap to expand — tap this pin to make it expanded by default'}">📌</span>`
+    : '';
+  return `<div class="row card-toggle-header" onclick="toggleCardRuntime('${cardId}', ${fallback})">
+    <h3 style="margin:0; flex:1;">${titleHtml}</h3>
+    ${extraHtml || ''}
+    ${pin}
+    <span class="card-chevron">${expanded ? '▾' : '▸'}</span>
+  </div>`;
 }
 
 // ---------- WORKOUT FLOW CONFIG ----------
@@ -4200,6 +4271,25 @@ function getMeasurementTrend(key) {
   return { latest, previous, change };
 }
 
+// ---------- LEFT / RIGHT SYMMETRY ----------
+// Compares the latest logged value on each side of every bilateral part.
+// diff > 0 means left is bigger, diff < 0 means right is bigger.
+const SYMMETRY_PAIRS = [
+  { left: 'armsL', right: 'armsR', label: 'Arms' },
+  { left: 'forearmsL', right: 'forearmsR', label: 'Forearms' },
+  { left: 'wristL', right: 'wristR', label: 'Wrist' },
+  { left: 'thighsL', right: 'thighsR', label: 'Thighs' },
+  { left: 'calvesL', right: 'calvesR', label: 'Calves' },
+];
+function getSymmetryChecks() {
+  return SYMMETRY_PAIRS.map(p => {
+    const l = getLatestMeasurementValue(p.left);
+    const r = getLatestMeasurementValue(p.right);
+    if (!l || !r) return { label: p.label, available: false };
+    return { label: p.label, available: true, diff: fmtMeasure1(l.value - r.value) };
+  });
+}
+
 // ---------- BODY FAT % (U.S. Navy method) ----------
 // Needs height (stored once, edited rarely) plus neck + waist (+ hips for
 // women). Uses whatever the latest logged value of each is, even if they
@@ -5192,7 +5282,8 @@ function renderProgress() {
   return `<main>
     ${renderTodayHeader()}
     <div class="card" id="pcard-overview">
-      <h3>📊 Overview</h3>
+      ${collapsibleHeader('pcard-overview', '📊 Overview', false)}
+      ${isCardExpanded('pcard-overview', false) ? `
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px;">
         <div><div class="livectrl-label">Total Sessions</div><div style="font-size:22px; font-weight:800;">${overview.totalSessions}</div></div>
         <div><div class="livectrl-label">This Month</div><div style="font-size:22px; font-weight:800;">${overview.thisMonthSessions}</div></div>
@@ -5204,35 +5295,34 @@ function renderProgress() {
       <div style="margin-top:16px;">
         <div class="livectrl-label" style="margin-bottom:8px;">Workouts per Month</div>
         <div style="display:flex; align-items:flex-end; gap:6px; height:60px;">${monthlyBarsHtml}</div>
-      </div>
+      </div>` : ''}
     </div>
     <div class="card" id="pcard-prs">
-      <h3>🏆 Recent PRs</h3>
-      ${prs}
+      ${collapsibleHeader('pcard-prs', '🏆 Recent PRs', false)}
+      ${isCardExpanded('pcard-prs', false) ? prs : ''}
     </div>
     <div class="card" id="pcard-balance">
-      <h3>⚖️ Muscle-Group Balance <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(last 30 days)</span></h3>
-      ${balanceHtml}
+      ${collapsibleHeader('pcard-balance', '⚖️ Muscle-Group Balance <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(last 30 days)</span>', false)}
+      ${isCardExpanded('pcard-balance', false) ? balanceHtml : ''}
     </div>
     <div class="card" id="pcard-bests">
-      <h3>🥇 ${progDay.icon} ${progDay.label} — All-Time Bests</h3>
-      ${bestsHtml}
+      ${collapsibleHeader('pcard-bests', `🥇 ${progDay.icon} ${progDay.label} — All-Time Bests`, false)}
+      ${isCardExpanded('pcard-bests', false) ? bestsHtml : ''}
     </div>
     <div class="card" id="pcard-duration">
-      <h3>⏱ Session Time by Day</h3>
-      ${durationByDay}
+      ${collapsibleHeader('pcard-duration', '⏱ Session Time by Day', false)}
+      ${isCardExpanded('pcard-duration', false) ? durationByDay : ''}
     </div>
     <div class="card" id="pcard-volume">
-      <h3>💪 Training Volume by Day</h3>
-      ${volumeByDay}
-      <div class="meta" style="margin-top:8px; margin-bottom:0;">Total weight × reps across all weighted exercises in a session — a broader "am I doing more overall" number than any single exercise's chart shows on its own.</div>
+      ${collapsibleHeader('pcard-volume', '💪 Training Volume by Day', false)}
+      ${isCardExpanded('pcard-volume', false) ? `${volumeByDay}
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Total weight × reps across all weighted exercises in a session — a broader "am I doing more overall" number than any single exercise's chart shows on its own.</div>` : ''}
     </div>
     <div class="card" id="pcard-measurements">
-      <div class="row" style="align-items:center; flex-wrap:wrap; gap:8px;">
-        <h3 style="margin:0; flex:1;">📐 Body & Measurements</h3>
-        <button class="btn small secondary" onclick="logBodyweight()">+ Weight</button>
-        <button class="btn small secondary" onclick="logMeasurements()">+ Measure</button>
-      </div>
+      ${collapsibleHeader('pcard-measurements', '📐 Body & Measurements', true,
+        `<button class="btn small secondary" onclick="event.stopPropagation(); logBodyweight();">+ Weight</button>
+         <button class="btn small secondary" onclick="event.stopPropagation(); logMeasurements();">+ Measure</button>`)}
+      ${isCardExpanded('pcard-measurements', true) ? `
       ${shouldShowMeasurementReminder() ? `
         <div class="measure-reminder-banner">
           <span>📏 It's been ${daysSinceLastMeasurement()} days since your last measurement — worth logging again?</span>
@@ -5269,6 +5359,16 @@ function renderProgress() {
           : `<div class="meta" style="margin-top:6px;">
                📉 Body Fat %: ${!height ? `set your <span style="text-decoration:underline; cursor:pointer;" onclick="openHeightModal()">height</span> and log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate` : `log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate`}
              </div>`;
+        const symmetry = getSymmetryChecks().filter(s => s.available);
+        const symmetrySection = symmetry.length ? `
+          <div class="meta" style="margin-top:10px; margin-bottom:4px;">⚖️ Left / Right Symmetry</div>
+          <div class="measure-grid">${symmetry.map(s => `
+            <div class="measure-row" style="cursor:default;">
+              <span class="mlabel">${s.label}</span>
+              <span class="mval-wrap">
+                <span class="mval">${s.diff === 0 ? 'Even' : `${s.diff > 0 ? 'L' : 'R'} +${Math.abs(s.diff)}cm`}</span>
+              </span>
+            </div>`).join('')}</div>` : '';
         const ms = getMeasurementsStats();
         const msSection = !ms
           ? `<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, hips, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
@@ -5286,17 +5386,17 @@ function renderProgress() {
               return `<div class="meta" style="margin-top:6px;">📐 ${ms.loggedCount} of ${ms.totalCount} measurements tracked${ms.mostRecentDate ? ` · last logged ${new Date(ms.mostRecentDate).toLocaleDateString()}` : ''}</div>
                 ${bfSection}
                 ${measurementsGridHtml()}
+                ${symmetrySection}
                 <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleMeasurementsHistory()">📜 Recent measurement entries ${measurementsHistoryOpen ? '▲' : '▼'}</div>
                 <div id="measurementsHistoryList" style="display:${measurementsHistoryOpen ? 'block' : 'none'};">${historyRows || '<div class="empty" style="padding:8px 0;">No entries yet.</div>'}</div>`;
             })();
         return `${bwSection}<div style="border-top:1px solid var(--border-strong); margin:14px 0;"></div>${msSection}`;
-      })()}
+      })()}` : ''}
     </div>
     <div class="card" id="pcard-duration-radar">
-      <div class="row" style="align-items:center;">
-        <h3 style="margin:0;">🕸️ Recent Pace <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(avg of last ${getRadarSessionCount()} workouts per group)</span></h3>
-        <span onclick="toggleRadarOptions()" style="cursor:pointer; font-size:17px; padding:2px 4px;" title="Change how many recent workouts to average">⚙️</span>
-      </div>
+      ${collapsibleHeader('pcard-duration-radar', `🕸️ Recent Pace <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(avg of last ${getRadarSessionCount()} workouts per group)</span>`, false,
+        `<span onclick="event.stopPropagation(); toggleRadarOptions();" style="cursor:pointer; font-size:17px; padding:2px 4px;" title="Change how many recent workouts to average">⚙️</span>`)}
+      ${isCardExpanded('pcard-duration-radar', false) ? `
       <div id="radarOptionsPanel" style="display:${radarOptionsOpen ? 'block' : 'none'}; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-strong);">
         <div class="meta" style="margin-bottom:6px;">Average over last…</div>
         <div class="tabs" style="padding:0; background:transparent; margin-top:0;">
@@ -5307,7 +5407,7 @@ function renderProgress() {
       </div>
       ${DAYS.length >= 3 ? `<div style="position:relative; height:280px; margin-top:12px;"><canvas id="durationRadarChart"></canvas></div>`
         : `<div class="empty" style="padding:10px 0;">Add at least 3 workout days to compare them on a spider chart.</div>`}
-      <div class="meta" id="durationRadarNote" style="margin-top:6px; margin-bottom:0;"></div>
+      <div class="meta" id="durationRadarNote" style="margin-top:6px; margin-bottom:0;"></div>` : ''}
     </div>
     <div class="card" id="pcard-progression" style="padding:0; overflow:hidden;">
       <div class="tabs" id="progressDayTabs" style="border-radius:16px 16px 0 0;">${progTabs}</div>
@@ -6611,11 +6711,10 @@ function renderSettings() {
       <button class="btn small secondary" onclick="setView('manage')">← Back</button>
       <h3 style="margin:0;">⚙️ App Settings</h3>
     </div>
-    <div class="card">
-      <div class="row" style="align-items:center;">
-        <h3 style="margin:0;">📋 Workout Plan: ${escapeHtml(getActivePlanName())}</h3>
-        <span onclick="renamePlan()" style="cursor:pointer; font-size:16px; padding:2px 4px;" title="Rename this plan">✏️</span>
-      </div>
+    <div class="card" id="scard-plan">
+      ${collapsibleHeader('scard-plan', `📋 Workout Plan: ${escapeHtml(getActivePlanName())}`, false,
+        `<span onclick="event.stopPropagation(); renamePlan();" style="cursor:pointer; font-size:16px; padding:2px 4px;" title="Rename this plan">✏️</span>`)}
+      ${isCardExpanded('scard-plan', false) ? `
       <div class="meta" style="margin-top:6px; margin-bottom:0;">Switching to a new plan keeps everything about this one — days, exercises, progression, and history — safely saved so you can switch back anytime. Nothing is deleted.</div>
       <button class="btn small secondary" style="margin-top:10px;" onclick="startNewPlan()">+ Start a New Plan</button>
       ${Object.keys(state.plans || {}).length ? `
@@ -6628,19 +6727,21 @@ function renderSettings() {
               <button class="btn small secondary" onclick="deleteArchivedPlan('${id}')">🗑</button>
             </span>
           </div>`).join('')}
-      ` : ''}
+      ` : ''}` : ''}
     </div>
-    <div class="card">
-      <h3>🎨 Appearance</h3>
+    <div class="card" id="scard-appearance">
+      ${collapsibleHeader('scard-appearance', '🎨 Appearance', false)}
+      ${isCardExpanded('scard-appearance', false) ? `
       <div class="tabs" style="padding:0; background:transparent; margin-top:4px; flex-wrap:wrap;">
         ${Object.entries(THEMES).map(([key, t]) =>
           `<div class="tab" style="${getTheme()===key?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('${key}')">${t.icon} ${escapeHtml(t.name)}</div>`
         ).join('')}
       </div>
-      <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean daytime look, AMOLED Black is true black for OLED screens, High Contrast maximizes legibility with bold borders and a bright accent, and Elegant is a soft lavender/indigo look with rounder cards.</div>
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean daytime look, AMOLED Black is true black for OLED screens, High Contrast maximizes legibility with bold borders and a bright accent, and Elegant is a soft lavender/indigo look with rounder cards.</div>` : ''}
     </div>
-    <div class="card">
-      <h3>📐 Body Diagram</h3>
+    <div class="card" id="scard-bodydiagram">
+      ${collapsibleHeader('scard-bodydiagram', '📐 Body Diagram', false)}
+      ${isCardExpanded('scard-bodydiagram', false) ? `
       <div class="tabs" style="padding:0; background:transparent; margin-top:4px;">
         <div class="tab" style="${getMeasurementsGender()==='male'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setMeasurementsGender('male'); render();">Male</div>
         <div class="tab" style="${getMeasurementsGender()==='female'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setMeasurementsGender('female'); render();">Female</div>
@@ -6649,18 +6750,20 @@ function renderSettings() {
       <label class="row" style="margin-top:12px; align-items:center; gap:8px; cursor:pointer; border-top:1px solid var(--border-strong); padding-top:12px;">
         <input type="checkbox" ${getMeasurementReminderEnabled() ? 'checked' : ''} onchange="setMeasurementReminderEnabled(this.checked)">
         <span class="meta" style="margin:0;">Remind me to log measurements after ${MEASUREMENT_REMINDER_DAYS} days (shows a banner on the Progress tab)</span>
-      </label>
+      </label>` : ''}
     </div>
-    <div class="card">
-      <h3>🎯 Workout Flow</h3>
+    <div class="card" id="scard-flow">
+      ${collapsibleHeader('scard-flow', '🎯 Workout Flow', false)}
+      ${isCardExpanded('scard-flow', false) ? `
       <div class="tabs" style="padding:0; background:transparent; margin-top:4px;">
         <div class="tab" style="${getFocusMode()?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setFocusMode(true)">🎯 Focus (guided)</div>
         <div class="tab" style="${!getFocusMode()?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setFocusMode(false)">☰ Full list</div>
       </div>
-      <div class="meta" style="margin-top:8px; margin-bottom:0;">Focus shows one exercise at a time and auto-advances as you finish each one — no scrolling needed. Full list shows everything at once, like before.</div>
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Focus shows one exercise at a time and auto-advances as you finish each one — no scrolling needed. Full list shows everything at once, like before.</div>` : ''}
     </div>
-    <div class="card">
-      <h3>⏱ Timer Alerts</h3>
+    <div class="card" id="scard-timer">
+      ${collapsibleHeader('scard-timer', '⏱ Timer Alerts', false)}
+      ${isCardExpanded('scard-timer', false) ? `
       <label class="row" style="margin-top:8px; align-items:center; gap:8px; cursor:pointer;">
         <input type="checkbox" ${getKeepScreenOnEnabled() ? 'checked' : ''} onchange="setKeepScreenOnEnabled(this.checked)">
         <span class="meta" style="margin:0;">Keep screen on during your workout (from your first set to finishing the day)</span>
@@ -6719,10 +6822,20 @@ function renderSettings() {
         ${getTimerSpeechEnabled() ? '<button class="btn small secondary" onclick="previewTimerSpeech()">▶ Test speech</button>' : ''}
         ${getTimerFlashEnabled() ? '<button class="btn small secondary" onclick="previewTimerFlash()">▶ Test flash</button>' : ''}
       </div>
-      <div class="meta" style="margin-top:10px; margin-bottom:0;">Applies to the rest and hold (plank-style) timers. The extra alerts (flash, speech) are off by default — turn on whichever fit a quiet gym or a phone that's out of sight.</div>
+      <div class="meta" style="margin-top:10px; margin-bottom:0;">Applies to the rest and hold (plank-style) timers. The extra alerts (flash, speech) are off by default — turn on whichever fit a quiet gym or a phone that's out of sight.</div>` : ''}
     </div>
-    <div class="card" style="border-color:rgba(200,140,30,.45);">
-      <h3 style="color:#ffcb4a;">🧪 Test Mode</h3>
+    <div class="card" style="border-color:rgba(108,92,231,.45);">
+      <h3 style="color:#8b7dff;">🧰 Edit Defaults Mode</h3>
+      <div class="meta">${isEditDefaultsMode()
+        ? 'Active — every collapsible card now shows a 📌 pin. Tap a pin to set whether that card starts expanded or collapsed next time. Turn this off when done to hide the pins again.'
+        : 'Cards on Progress, History, and Settings can collapse to cut down scrolling. Turn this on to reveal a 📌 pin on each one and set its default — off by default so tiles stay uncluttered day-to-day.'}</div>
+      ${isEditDefaultsMode()
+        ? `<button class="btn small" style="background:#5b4fc4;" onclick="setEditDefaultsMode(false)">Done Editing</button>`
+        : `<button class="btn small" style="background:#5b4fc4; margin-top:8px;" onclick="setEditDefaultsMode(true)">Edit Card Defaults</button>`}
+    </div>
+    <div class="card" style="border-color:rgba(200,140,30,.45);" id="scard-testmode">
+      ${collapsibleHeader('scard-testmode', '<span style="color:#ffcb4a;">🧪 Test Mode</span>', isTestMode())}
+      ${isCardExpanded('scard-testmode', isTestMode()) ? `
       <div class="meta">${isTestMode()
         ? 'You are currently in test mode. Everything you do here is isolated from your real data.'
         : 'Try anything — logging, editing exercises, resetting data — on an isolated copy, without touching your real progress.'}</div>
@@ -6731,12 +6844,13 @@ function renderSettings() {
              <button class="btn small" style="background:#8a6a1a;" onclick="disableTestMode()">Exit Test Mode</button>
              <button class="btn small secondary" onclick="resetTestData()">Reset Test Data</button>
            </div>`
-        : `<button class="btn small" style="background:#8a6a1a; margin-top:8px;" onclick="enableTestMode()">Enable Test Mode</button>`}
+        : `<button class="btn small" style="background:#8a6a1a; margin-top:8px;" onclick="enableTestMode()">Enable Test Mode</button>`}` : ''}
     </div>
-    <div class="card" style="border-color:rgba(216,67,74,.45);">
-      <h3 style="color:#ff6b6b;">⚠️ Danger Zone</h3>
+    <div class="card" style="border-color:rgba(216,67,74,.45);" id="scard-danger">
+      ${collapsibleHeader('scard-danger', '<span style="color:#ff6b6b;">⚠️ Danger Zone</span>', false)}
+      ${isCardExpanded('scard-danger', false) ? `
       <div class="meta">Permanently deletes all workout history, progression, PRs, and streaks. Your exercise list is kept.</div>
-      <button class="btn small" style="background:#8a2c2c; margin-top:8px;" onclick="resetAllData()">Reset All Data</button>
+      <button class="btn small" style="background:#8a2c2c; margin-top:8px;" onclick="resetAllData()">Reset All Data</button>` : ''}
     </div>
   </main>`;
 }
@@ -6975,7 +7089,9 @@ function renderHistory() {
     : daysSince === 1 ? 'Last backup: 1 day ago'
     : `Last backup: ${daysSince} days ago`;
 
-  const backupBar = `<div class="card">
+  const backupBar = `<div class="card" id="hcard-backup">
+    ${collapsibleHeader('hcard-backup', '💾 Backup & Sync', false)}
+    ${isCardExpanded('hcard-backup', false) ? `
     <div class="row">
       <button class="btn small secondary" onclick="shareBackup()">📤 Share file</button>
       <button class="btn small secondary" onclick="exportBackup()">⬇ Download</button>
@@ -6990,7 +7106,7 @@ function renderHistory() {
       <span class="meta" style="margin:0;">Auto-backup (download) after finishing a full workout</span>
     </label>
     <div class="meta" style="margin:2px 0 0;">${getAutoBackupOnComplete() ? 'A local backup file downloads automatically each time you finish every exercise in a workout group.' : 'Auto-backup is off — backups only happen when you tap Share, Download, or Sync now above.'}</div>
-    ${driveSection}
+    ${driveSection}` : ''}
   </div>`;
   if (state.history.length === 0) return `<main>${backupBar}${renderCalendar()}<div class="empty">No workouts logged yet.</div></main>`;
   const items = [...state.history].reverse().slice(0,100).map(h => {
@@ -7014,8 +7130,14 @@ function renderHistory() {
   }).join('');
   return `<main>${backupBar}
     ${renderCalendar()}
-    <div class="card"><h3>⏱ Recent Session Lengths</h3>${durationsHtml}</div>
-    <div class="card">${items}</div>
+    <div class="card" id="hcard-durations">
+      ${collapsibleHeader('hcard-durations', '⏱ Recent Session Lengths', true)}
+      ${isCardExpanded('hcard-durations', true) ? durationsHtml : ''}
+    </div>
+    <div class="card" id="hcard-log">
+      ${collapsibleHeader('hcard-log', '🗒 Full Exercise Log', false)}
+      ${isCardExpanded('hcard-log', false) ? items : ''}
+    </div>
   </main>`;
 }
 
@@ -7149,6 +7271,7 @@ if (isTestMode()) {
   banner.style.display = 'block';
   banner.textContent = '🧪 TEST MODE — changes here do NOT affect your real data';
 }
+updateEditDefaultsBanner();
 render();
 setTimeout(maybeNotifyMeasurementReminder, 1500);
 // Extra safety net: closing the tab/PWA mid-set with unfinished progress is
