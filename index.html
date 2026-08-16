@@ -135,7 +135,54 @@
     --ring-track: #272727;
     color-scheme: dark;
   }
+  /* Elegant — soft lavender/indigo palette inspired by modern fitness-app
+     UI: white cards floating on a pale purple background, a rich indigo
+     accent, generous rounded corners, and diffused (not harsh) shadows. */
+  [data-theme="elegant"] {
+    --bg: #f2f1fb;
+    --surface: #ffffff;
+    --surface-raised: #f6f5fc;
+    --border: rgba(108,92,231,0.10);
+    --border-strong: rgba(108,92,231,0.18);
+    --text: #221f36;
+    --text-dim: #6b6885;
+    --text-faint: #a19dc2;
+    --accent: #6c5ce7;
+    --success: #22b573;
+    --success-bg: #e6f7ef;
+    --success-glow: rgba(34,181,115,.35);
+    --success-border: rgba(34,181,115,.4);
+    --danger: #e0555f;
+    --danger-bg: #fbeaec;
+    --header-grad-a: #ffffff;
+    --header-grad-b: #f3f1fc;
+    --control-bg: #ece9fb;
+    --control-bg-active: #ddd7f8;
+    --done-bg: #22b573;
+    --card-shadow: 0 2px 10px rgba(108,92,231,.08), 0 14px 34px rgba(108,92,231,.10);
+    --streak-color: #f2994a;
+    --ring-track: #e7e4f7;
+    color-scheme: light;
+  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* Elegant theme structural touches — rounder cards/buttons, a soft
+     lavender page gradient, and a pill-style active nav item, layered on
+     top of the color variables above via the same [data-theme] scoping
+     the other themes use for colors only. */
+  [data-theme="elegant"] body {
+    background: linear-gradient(160deg, #f8f7fd 0%, #ecebf9 55%, #e7e9fb 100%);
+    background-attachment: fixed;
+  }
+  [data-theme="elegant"] .card { border-radius: 22px; }
+  [data-theme="elegant"] .btn { border-radius: 14px; }
+  [data-theme="elegant"] .btn.small { border-radius: 11px; }
+  [data-theme="elegant"] header::after {
+    background: linear-gradient(90deg, #6c5ce7, #a29bfe, #74b9ff); opacity: .55;
+  }
+  [data-theme="elegant"] .nav { border-top: none; background: transparent; padding-top: 6px; }
+  [data-theme="elegant"] .navbtn { border-radius: 14px; }
+  [data-theme="elegant"] .navbtn.active::before { display: none; }
+  [data-theme="elegant"] .navbtn.active { background: var(--control-bg-active); border-color: transparent; }
   body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -314,10 +361,12 @@
     border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom, 0);
   }
   .navbtn {
-    flex: 1; padding: 13px 0 11px; text-align: center; font-size: 11.5px; font-weight: 600;
-    color: var(--text-faint); position: relative; transition: color .2s ease; letter-spacing: -0.01em;
+    flex: 1; padding: 12px 0 10px; text-align: center; font-size: 11.5px; font-weight: 600;
+    color: var(--text-dim); position: relative; transition: color .2s ease, background .2s ease, border-color .2s ease;
+    letter-spacing: -0.01em; margin: 7px 4px; background: var(--surface-raised);
+    border: 1px solid var(--border); border-radius: 12px;
   }
-  .navbtn.active { color: var(--accent); }
+  .navbtn.active { color: var(--accent); background: transparent; border-color: transparent; }
   .navbtn.active::before {
     content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
     width: 28px; height: 2.5px; border-radius: 0 0 3px 3px; background: var(--accent);
@@ -525,6 +574,19 @@
   .measure-row .mtrend-btn {
     background: none; border: none; padding: 0 0 0 2px; font-size: 12px;
     line-height: 1; cursor: pointer; opacity: 0.8;
+  }
+  .measure-row-wrap { display: flex; flex-direction: column; }
+  .mgoal-bar-wrap { padding: 4px 9px 0; }
+  .mgoal-bar {
+    height: 5px; border-radius: 3px; background: var(--bg); overflow: hidden;
+    border: 1px solid var(--border-strong);
+  }
+  .mgoal-bar-fill { height: 100%; background: #ff5c5c; border-radius: 3px; transition: width .3s ease; }
+  .mgoal-label { font-size: 9.5px; color: var(--text-faint); display: block; margin-top: 2px; }
+  .measure-reminder-banner {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: rgba(255,92,92,0.12); border: 1px solid rgba(255,92,92,0.35);
+    border-radius: 10px; padding: 9px 11px; margin-bottom: 10px; font-size: 12.5px;
   }
   .btn.danger { background: var(--danger); }
 
@@ -790,6 +852,7 @@ const THEMES = {
   light:    { name: 'Light',         icon: '☀️', metaColor: '#ffffff' },
   black:    { name: 'AMOLED Black',  icon: '⚫', metaColor: '#000000' },
   contrast: { name: 'High Contrast', icon: '⚡', metaColor: '#000000' },
+  elegant:  { name: 'Elegant',       icon: '💜', metaColor: '#f2f1fb' },
 };
 function getTheme() {
   const t = localStorage.getItem(THEME_KEY);
@@ -4081,6 +4144,7 @@ const MEASUREMENT_PARTS = [
   { key: 'shoulders', label: 'Shoulders' },
   { key: 'chestLats', label: 'Chest / Lats' },
   { key: 'waist', label: 'Waist' },
+  { key: 'hips', label: 'Hips' },
   { key: 'armsL', label: 'Left Arm' },
   { key: 'armsR', label: 'Right Arm' },
   { key: 'forearmsL', label: 'Left Forearm' },
@@ -4136,6 +4200,295 @@ function getMeasurementTrend(key) {
   return { latest, previous, change };
 }
 
+// ---------- BODY FAT % (U.S. Navy method) ----------
+// Needs height (stored once, edited rarely) plus neck + waist (+ hips for
+// women). Uses whatever the latest logged value of each is, even if they
+// weren't all logged on the same day — same "best available" approach the
+// rest of the measurements feature uses.
+function getUserHeightCm() {
+  return state.userHeightCm || null;
+}
+function setUserHeightCm(cm) {
+  state.userHeightCm = cm;
+  saveState();
+}
+function calcNavyBodyFat(waistCm, neckCm, heightCm, hipCm, gender) {
+  if (gender === 'female') {
+    if (hipCm == null) return null;
+    return 495 / (1.29579 - 0.35004 * Math.log10(waistCm + hipCm - neckCm) + 0.22100 * Math.log10(heightCm)) - 450;
+  }
+  return 495 / (1.0324 - 0.19077 * Math.log10(waistCm - neckCm) + 0.15456 * Math.log10(heightCm)) - 450;
+}
+// Sanity-guards the formula's output — bad/impossible inputs (e.g. neck
+// logged bigger than waist) can send log10() into a range that produces a
+// meaningless number, so anything outside a plausible body-fat range is
+// treated as "can't estimate" rather than shown.
+function isPlausibleBodyFat(pct) {
+  return typeof pct === 'number' && isFinite(pct) && pct > 2 && pct < 65;
+}
+function getBodyFatEstimate() {
+  const height = getUserHeightCm();
+  if (!height) return null;
+  const neck = getLatestMeasurementValue('neck');
+  const waist = getLatestMeasurementValue('waist');
+  if (!neck || !waist) return null;
+  const gender = getMeasurementsGender();
+  const hip = gender === 'female' ? getLatestMeasurementValue('hips') : null;
+  if (gender === 'female' && !hip) return null;
+  const pct = calcNavyBodyFat(waist.value, neck.value, height, hip ? hip.value : null, gender);
+  if (!isPlausibleBodyFat(pct)) return null;
+  const dates = [neck.date, waist.date, ...(hip ? [hip.date] : [])];
+  const oldest = dates.slice().sort()[0];
+  return { pct: fmtMeasure1(pct), asOf: oldest, mixedDates: new Set(dates.map(dateStr)).size > 1 };
+}
+// One body-fat % per day where neck + waist (+ hips) were ALL logged
+// together — a proper trend needs matched same-day inputs, unlike the
+// "best available" current estimate above.
+function getBodyFatHistory() {
+  const height = getUserHeightCm();
+  if (!height) return [];
+  const gender = getMeasurementsGender();
+  const out = [];
+  for (const e of getMeasurementsLog()) {
+    if (!e.values || e.values.neck == null || e.values.waist == null) continue;
+    if (gender === 'female' && e.values.hips == null) continue;
+    const pct = calcNavyBodyFat(e.values.waist, e.values.neck, height, e.values.hips, gender);
+    if (isPlausibleBodyFat(pct)) out.push({ date: e.date, value: fmtMeasure1(pct) });
+  }
+  return out;
+}
+function openHeightModal() {
+  const current = getUserHeightCm();
+  let unit = 'cm';
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.style.zIndex = 210;
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <h3>Height</h3>
+      <div class="meta" style="margin-bottom:0;">Used only for the body-fat % estimate. Set once, edit any time.</div>
+      <div class="row" style="align-items:center; gap:8px; margin-top:12px;">
+        <input type="number" inputmode="decimal" step="0.1" min="1" class="confirm-input" id="heightInputField"
+          placeholder="Height" value="${current ? fmtMeasure1(current) : ''}" style="flex:1; margin-top:0;">
+        <div class="row" style="gap:4px;">
+          <button class="btn small" id="heightUnitCmBtn">cm</button>
+          <button class="btn small secondary" id="heightUnitInBtn">in</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px; gap:8px;">
+        <button class="btn secondary" id="heightCancelBtn" style="flex:1;">Cancel</button>
+        <button class="btn" id="heightSaveBtn" style="flex:1;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  const field = overlay.querySelector('#heightInputField');
+  const cmBtn = overlay.querySelector('#heightUnitCmBtn');
+  const inBtn = overlay.querySelector('#heightUnitInBtn');
+  const valueFor = (u) => {
+    if (current == null) return '';
+    return fmtMeasure1(u === 'in' ? cmToIn(current) : current);
+  };
+  cmBtn.onclick = () => { unit = 'cm'; cmBtn.className = 'btn small'; inBtn.className = 'btn small secondary'; field.value = valueFor('cm'); };
+  inBtn.onclick = () => { unit = 'in'; inBtn.className = 'btn small'; cmBtn.className = 'btn small secondary'; field.value = valueFor('in'); };
+  overlay.querySelector('#heightCancelBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#heightSaveBtn').onclick = () => {
+    const n = parseFloat(field.value);
+    if (isNaN(n) || n <= 0) { field.style.borderColor = 'var(--danger)'; field.focus(); return; }
+    setUserHeightCm(fmtMeasure1(unit === 'in' ? inToCm(n) : n));
+    close();
+    render();
+  };
+  setTimeout(() => field.focus(), 50);
+}
+let bodyFatChartRef = null;
+function openBodyFatTrendModal() {
+  const hist = getBodyFatHistory();
+  const est = getBodyFatEstimate();
+  if (!hist.length && !est) return;
+  const existing = document.getElementById('bodyFatTrendOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'bodyFatTrendOverlay';
+  overlay.style.zIndex = 215;
+  const rows = hist.slice().reverse().map((h, i) => {
+    const prev = hist[hist.length - 2 - i];
+    const d = prev ? fmtMeasure1(h.value - prev.value) : null;
+    const dHtml = d != null ? `<span class="mdelta">${d > 0 ? '▲' : d < 0 ? '▼' : '–'}${Math.abs(d)}</span>` : '';
+    return `<div class="histitem row" style="padding:6px 0;">
+      <span class="meta" style="margin:0;">${new Date(h.date).toLocaleDateString()}: <strong>${fmtMeasure1(h.value)}%</strong></span>
+      ${dHtml}
+    </div>`;
+  }).join('');
+  overlay.innerHTML = `
+    <div class="confirm-modal measure-modal">
+      <h3>📉 Body Fat % Trend</h3>
+      <div class="meta" style="margin-bottom:0;">U.S. Navy method estimate, from days where the needed measurements were all logged together.</div>
+      ${hist.length >= 2 ? `<div style="position:relative; height:180px; margin-top:12px;"><canvas id="bodyFatChart"></canvas></div>` : ''}
+      <div class="meta" style="margin-top:14px; margin-bottom:4px;">History</div>
+      <div style="max-height:220px; overflow-y:auto;">${rows || '<div class="empty" style="padding:8px 0;">No matched same-day entries yet.</div>'}</div>
+      <div class="row" style="margin-top:16px;">
+        <button class="btn secondary" id="bodyFatTrendCloseBtn" style="flex:1;">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => {
+    if (bodyFatChartRef) { bodyFatChartRef.destroy(); bodyFatChartRef = null; }
+    overlay.remove();
+  };
+  overlay.querySelector('#bodyFatTrendCloseBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  if (hist.length >= 2 && typeof Chart !== 'undefined') {
+    setTimeout(() => {
+      const canvas = document.getElementById('bodyFatChart');
+      if (!canvas) return;
+      const cssVars = getComputedStyle(document.documentElement);
+      const textFaintColor = cssVars.getPropertyValue('--text-faint').trim() || '#565b6c';
+      const gridColor = cssVars.getPropertyValue('--border-strong').trim() || 'rgba(255,255,255,.12)';
+      bodyFatChartRef = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: hist.map(h => new Date(h.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
+          datasets: [{
+            data: hist.map(h => h.value),
+            borderColor: '#ff5c5c', backgroundColor: '#ff5c5c22',
+            borderWidth: 2.5, pointRadius: 3, pointBackgroundColor: '#ff5c5c',
+            tension: 0.25, fill: true,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => ctx.parsed.y + '%' } } },
+          scales: {
+            x: { ticks: { color: textFaintColor, maxTicksLimit: 6 }, grid: { color: gridColor } },
+            y: { ticks: { color: textFaintColor }, grid: { color: gridColor } }
+          }
+        }
+      });
+    }, 0);
+  }
+}
+
+// ---------- MEASUREMENT REMINDERS ----------
+// Purely local/in-app: there's no backend to push notifications while the
+// app is closed, so the reliable mechanism is a banner shown when the app
+// is opened after 4+ weeks. If notification permission already happens to
+// be granted (from the timer-alert feature) we also fire a best-effort
+// native notification, once per day, as a bonus — never the only signal.
+function getMeasurementReminderEnabled() {
+  return localStorage.getItem('liftlog_measure_reminder') !== '0';
+}
+function setMeasurementReminderEnabled(on) {
+  localStorage.setItem('liftlog_measure_reminder', on ? '1' : '0');
+  render();
+}
+function daysSinceLastMeasurement() {
+  const log = getMeasurementsLog();
+  if (!log.length) return null;
+  const last = log[log.length - 1].date;
+  return Math.floor((Date.now() - new Date(last).getTime()) / 86400000);
+}
+const MEASUREMENT_REMINDER_DAYS = 28;
+function shouldShowMeasurementReminder() {
+  if (!getMeasurementReminderEnabled()) return false;
+  const days = daysSinceLastMeasurement();
+  return days != null && days >= MEASUREMENT_REMINDER_DAYS;
+}
+function maybeNotifyMeasurementReminder() {
+  if (!shouldShowMeasurementReminder()) return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const today = dateStr(new Date());
+  if (localStorage.getItem('liftlog_measure_notify_last') === today) return;
+  localStorage.setItem('liftlog_measure_notify_last', today);
+  try {
+    const days = daysSinceLastMeasurement();
+    new Notification('LiftLog', { body: `It's been ${days} days since you logged body measurements.` });
+  } catch (e) { /* best-effort only */ }
+}
+
+// ---------- MEASUREMENT GOALS ----------
+// One optional target value (cm) per body part. Progress is measured from
+// the FIRST logged value for that part (the starting point) toward the
+// goal, so it works the same whether the goal is bigger or smaller than
+// where you started (e.g. shrinking a waist vs. growing an arm).
+function getMeasurementGoal(key) {
+  const g = (state.measurementGoals || {})[key];
+  return g == null ? null : g;
+}
+function setMeasurementGoal(key, cmValue) {
+  state.measurementGoals = state.measurementGoals || {};
+  if (cmValue == null) delete state.measurementGoals[key];
+  else state.measurementGoals[key] = cmValue;
+  saveState();
+}
+function getMeasurementGoalProgress(key) {
+  const goal = getMeasurementGoal(key);
+  if (goal == null) return null;
+  const hist = getMeasurementHistoryForPart(key);
+  if (!hist.length) return { goal, start: null, current: null, pct: 0, done: false };
+  const start = hist[0].value;
+  const current = hist[hist.length - 1].value;
+  let pct = goal === start ? 100 : ((current - start) / (goal - start)) * 100;
+  pct = Math.max(0, Math.min(100, Math.round(pct)));
+  const done = goal >= start ? current >= goal : current <= goal;
+  return { goal, start, current, pct, done };
+}
+function openMeasurementGoalModal(partKey) {
+  const part = MEASUREMENT_PARTS.find(p => p.key === partKey);
+  if (!part) return;
+  const currentGoal = getMeasurementGoal(partKey);
+  let unit = 'cm';
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.style.zIndex = 210;
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <h3>🎯 ${part.label} Goal</h3>
+      <div class="meta" style="margin-bottom:0;">${currentGoal != null ? `Current goal: <strong>${fmtMeasure1(currentGoal)} cm</strong>` : 'Set a target and track progress from your first logged value.'}</div>
+      <div class="row" style="align-items:center; gap:8px; margin-top:12px;">
+        <input type="number" inputmode="decimal" step="0.1" min="1" class="confirm-input" id="goalInputField"
+          placeholder="Target" value="${currentGoal != null ? fmtMeasure1(currentGoal) : ''}" style="flex:1; margin-top:0;">
+        <div class="row" style="gap:4px;">
+          <button class="btn small" id="goalUnitCmBtn">cm</button>
+          <button class="btn small secondary" id="goalUnitInBtn">in</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px; gap:8px;">
+        ${currentGoal != null ? `<button class="btn secondary" id="goalClearBtn" style="flex:1;">Clear Goal</button>` : `<button class="btn secondary" id="goalCancelBtn" style="flex:1;">Cancel</button>`}
+        <button class="btn" id="goalSaveBtn" style="flex:1;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  const field = overlay.querySelector('#goalInputField');
+  const cmBtn = overlay.querySelector('#goalUnitCmBtn');
+  const inBtn = overlay.querySelector('#goalUnitInBtn');
+  const valueFor = (u) => {
+    const n = parseFloat(field.value);
+    if (isNaN(n)) return field.value;
+    const cm = unit === 'in' ? inToCm(n) : n;
+    return fmtMeasure1(u === 'in' ? cmToIn(cm) : cm);
+  };
+  cmBtn.onclick = () => { field.value = valueFor('cm'); unit = 'cm'; cmBtn.className = 'btn small'; inBtn.className = 'btn small secondary'; };
+  inBtn.onclick = () => { field.value = valueFor('in'); unit = 'in'; inBtn.className = 'btn small'; cmBtn.className = 'btn small secondary'; };
+  const cancelBtn = overlay.querySelector('#goalCancelBtn');
+  if (cancelBtn) cancelBtn.onclick = close;
+  const clearBtn = overlay.querySelector('#goalClearBtn');
+  if (clearBtn) clearBtn.onclick = () => { setMeasurementGoal(partKey, null); close(); refreshMeasurementsDiagramModal(); render(); };
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#goalSaveBtn').onclick = () => {
+    const n = parseFloat(field.value);
+    if (isNaN(n) || n <= 0) { field.style.borderColor = 'var(--danger)'; field.focus(); return; }
+    setMeasurementGoal(partKey, fmtMeasure1(unit === 'in' ? inToCm(n) : n));
+    close();
+    refreshMeasurementsDiagramModal();
+    render();
+  };
+  setTimeout(() => field.focus(), 50);
+}
+
 function logMeasurements() {
   openMeasurementsDiagramModal();
 }
@@ -4149,6 +4502,7 @@ const MALE_DOTS = [
   { key: 'shoulders', x: 22, y: 21 }, { key: 'shoulders', x: 78, y: 21 },
   { key: 'chestLats', x: 49, y: 28 },
   { key: 'waist', x: 49, y: 43 },
+  { key: 'hips', x: 49, y: 49 },
   { key: 'armsL', x: 85, y: 29 }, { key: 'armsR', x: 15, y: 29 },
   { key: 'forearmsL', x: 90, y: 37 }, { key: 'forearmsR', x: 10, y: 37 },
   { key: 'wristL', x: 94, y: 47 }, { key: 'wristR', x: 6, y: 47 },
@@ -4160,6 +4514,7 @@ const FEMALE_DOTS = [
   { key: 'shoulders', x: 23, y: 20 }, { key: 'shoulders', x: 77, y: 20 },
   { key: 'chestLats', x: 49, y: 26 },
   { key: 'waist', x: 50, y: 40 },
+  { key: 'hips', x: 50, y: 46 },
   { key: 'armsL', x: 76, y: 30 }, { key: 'armsR', x: 24, y: 30 },
   { key: 'forearmsL', x: 80, y: 37 }, { key: 'forearmsR', x: 20, y: 37 },
   { key: 'wristL', x: 86, y: 46 }, { key: 'wristR', x: 14, y: 46 },
@@ -4217,12 +4572,22 @@ function measurementsGridHtml() {
     const trendBtn = latest
       ? `<button class="mtrend-btn" onclick="event.stopPropagation(); openMeasurementTrendModal('${p.key}')">📈</button>`
       : '';
-    return `<div class="measure-row" onclick="openMeasurementPartModal('${p.key}')">
-      <span class="mlabel">${p.label}</span>
-      <span class="mval-wrap">
-        <span class="mval ${latest ? '' : 'empty'}">${latest ? fmtMeasure1(latest.value) + ' cm' : '—'}</span>
-        ${delta}${trendBtn}
-      </span>
+    const goalBtn = `<button class="mtrend-btn" onclick="event.stopPropagation(); openMeasurementGoalModal('${p.key}')">🎯</button>`;
+    const progress = getMeasurementGoalProgress(p.key);
+    const goalBar = progress ? `
+      <div class="mgoal-bar-wrap">
+        <div class="mgoal-bar"><div class="mgoal-bar-fill" style="width:${progress.pct}%;"></div></div>
+        <span class="mgoal-label">${progress.current == null ? `log to start · goal ${fmtMeasure1(progress.goal)}cm` : progress.done ? `🎉 goal reached (${fmtMeasure1(progress.goal)}cm)` : `${progress.pct}% to ${fmtMeasure1(progress.goal)}cm`}</span>
+      </div>` : '';
+    return `<div class="measure-row-wrap">
+      <div class="measure-row" onclick="openMeasurementPartModal('${p.key}')">
+        <span class="mlabel">${p.label}</span>
+        <span class="mval-wrap">
+          <span class="mval ${latest ? '' : 'empty'}">${latest ? fmtMeasure1(latest.value) + ' cm' : '—'}</span>
+          ${delta}${trendBtn}${goalBtn}
+        </span>
+      </div>
+      ${goalBar}
     </div>`;
   }).join('')}</div>`;
 }
@@ -4868,6 +5233,11 @@ function renderProgress() {
         <button class="btn small secondary" onclick="logBodyweight()">+ Weight</button>
         <button class="btn small secondary" onclick="logMeasurements()">+ Measure</button>
       </div>
+      ${shouldShowMeasurementReminder() ? `
+        <div class="measure-reminder-banner">
+          <span>📏 It's been ${daysSinceLastMeasurement()} days since your last measurement — worth logging again?</span>
+          <button class="btn small" style="flex-shrink:0;" onclick="logMeasurements()">Log</button>
+        </div>` : ''}
       ${(() => {
         const bw = getBodyweightStats();
         const bwSection = !bw
@@ -4887,9 +5257,21 @@ function renderProgress() {
                 <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleBodyweightLogList()">📜 Recent weight entries ${bodyweightLogListOpen ? '▲' : '▼'}</div>
                 <div id="bodyweightLogList" style="display:${bodyweightLogListOpen ? 'block' : 'none'};">${recentRows}</div>`;
             })();
+        const bf = getBodyFatEstimate();
+        const height = getUserHeightCm();
+        const bfSection = bf
+          ? `<div class="meta" style="margin-top:6px; cursor:pointer;" onclick="openBodyFatTrendModal()">
+               📉 Body Fat (Navy method): <strong>${bf.pct}%</strong>
+               <span style="color:var(--text-faint);">${bf.mixedDates ? '(from latest logged values)' : `(as of ${new Date(bf.asOf).toLocaleDateString()})`}</span>
+               · <span style="text-decoration:underline;">view trend</span>
+             </div>
+             <div class="meta" style="margin-top:2px; cursor:pointer;" onclick="openHeightModal()">Height: ${fmtMeasure1(height)} cm <span style="text-decoration:underline;">edit</span></div>`
+          : `<div class="meta" style="margin-top:6px;">
+               📉 Body Fat %: ${!height ? `set your <span style="text-decoration:underline; cursor:pointer;" onclick="openHeightModal()">height</span> and log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate` : `log neck + waist${getMeasurementsGender() === 'female' ? ' + hips' : ''} to see an estimate`}
+             </div>`;
         const ms = getMeasurementsStats();
         const msSection = !ms
-          ? `<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
+          ? `<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, hips, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
           : (() => {
               const log = getMeasurementsLog();
               const historyRows = log.slice().reverse().slice(0, 8).flatMap(e =>
@@ -4902,6 +5284,7 @@ function renderProgress() {
                 })
               ).join('');
               return `<div class="meta" style="margin-top:6px;">📐 ${ms.loggedCount} of ${ms.totalCount} measurements tracked${ms.mostRecentDate ? ` · last logged ${new Date(ms.mostRecentDate).toLocaleDateString()}` : ''}</div>
+                ${bfSection}
                 ${measurementsGridHtml()}
                 <div class="meta" style="margin-top:10px; cursor:pointer;" onclick="toggleMeasurementsHistory()">📜 Recent measurement entries ${measurementsHistoryOpen ? '▲' : '▼'}</div>
                 <div id="measurementsHistoryList" style="display:${measurementsHistoryOpen ? 'block' : 'none'};">${historyRows || '<div class="empty" style="padding:8px 0;">No entries yet.</div>'}</div>`;
@@ -6254,7 +6637,7 @@ function renderSettings() {
           `<div class="tab" style="${getTheme()===key?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setTheme('${key}')">${t.icon} ${escapeHtml(t.name)}</div>`
         ).join('')}
       </div>
-      <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean daytime look, AMOLED Black is true black for OLED screens, and High Contrast maximizes legibility with bold borders and a bright accent.</div>
+      <div class="meta" style="margin-top:8px; margin-bottom:0;">Dark is the default. Light gives a clean daytime look, AMOLED Black is true black for OLED screens, High Contrast maximizes legibility with bold borders and a bright accent, and Elegant is a soft lavender/indigo look with rounder cards.</div>
     </div>
     <div class="card">
       <h3>📐 Body Diagram</h3>
@@ -6263,6 +6646,10 @@ function renderSettings() {
         <div class="tab" style="${getMeasurementsGender()==='female'?'background:var(--accent);color:#fff;border-color:transparent;':''}" onclick="setMeasurementsGender('female'); render();">Female</div>
       </div>
       <div class="meta" style="margin-top:8px; margin-bottom:0;">Which body outline shows on the Body Measurements diagram. Your pick is remembered — no need to choose again.</div>
+      <label class="row" style="margin-top:12px; align-items:center; gap:8px; cursor:pointer; border-top:1px solid var(--border-strong); padding-top:12px;">
+        <input type="checkbox" ${getMeasurementReminderEnabled() ? 'checked' : ''} onchange="setMeasurementReminderEnabled(this.checked)">
+        <span class="meta" style="margin:0;">Remind me to log measurements after ${MEASUREMENT_REMINDER_DAYS} days (shows a banner on the Progress tab)</span>
+      </label>
     </div>
     <div class="card">
       <h3>🎯 Workout Flow</h3>
@@ -6763,7 +7150,7 @@ if (isTestMode()) {
   banner.textContent = '🧪 TEST MODE — changes here do NOT affect your real data';
 }
 render();
-
+setTimeout(maybeNotifyMeasurementReminder, 1500);
 // Extra safety net: closing the tab/PWA mid-set with unfinished progress is
 // an easy accident. Most mobile browsers won't show a custom dialog here,
 // but desktop/Android Chrome will prompt — free protection where it works,
