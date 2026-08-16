@@ -503,10 +503,12 @@
   .measure-body-img { width: 100%; height: auto; display: block; user-select: none; filter: drop-shadow(0 0 1px var(--border-strong)); }
   .measure-dot {
     position: absolute; width: 16px; height: 16px; margin-left: -8px; margin-top: -8px;
-    border-radius: 50%; border: 2px solid var(--bg); cursor: pointer;
-    box-shadow: 0 0 0 1px var(--border-strong); transition: transform .12s ease;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,0.65); cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.6); transition: transform .12s ease;
   }
   .measure-dot:active { transform: scale(0.85); }
+  .measure-dot-none { border-color: rgba(255,255,255,0.4); }
+  .measure-dot-today { box-shadow: 0 0 0 4px rgba(255,82,82,0.35), 0 1px 4px rgba(0,0,0,0.6); }
   .measure-grid {
     display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 10px;
   }
@@ -4148,8 +4150,8 @@ const MALE_DOTS = [
   { key: 'chestLats', x: 49, y: 28 },
   { key: 'waist', x: 49, y: 43 },
   { key: 'armsL', x: 85, y: 29 }, { key: 'armsR', x: 15, y: 29 },
-  { key: 'forearmsL', x: 86, y: 33 }, { key: 'forearmsR', x: 14, y: 33 },
-  { key: 'wristL', x: 92, y: 41 }, { key: 'wristR', x: 8, y: 41 },
+  { key: 'forearmsL', x: 90, y: 37 }, { key: 'forearmsR', x: 10, y: 37 },
+  { key: 'wristL', x: 94, y: 47 }, { key: 'wristR', x: 6, y: 47 },
   { key: 'thighsL', x: 65, y: 60 }, { key: 'thighsR', x: 35, y: 60 },
   { key: 'calvesL', x: 67, y: 78 }, { key: 'calvesR', x: 32, y: 78 },
 ];
@@ -4159,8 +4161,8 @@ const FEMALE_DOTS = [
   { key: 'chestLats', x: 49, y: 26 },
   { key: 'waist', x: 50, y: 40 },
   { key: 'armsL', x: 76, y: 30 }, { key: 'armsR', x: 24, y: 30 },
-  { key: 'forearmsL', x: 79, y: 36 }, { key: 'forearmsR', x: 21, y: 36 },
-  { key: 'wristL', x: 82, y: 43 }, { key: 'wristR', x: 18, y: 43 },
+  { key: 'forearmsL', x: 80, y: 37 }, { key: 'forearmsR', x: 20, y: 37 },
+  { key: 'wristL', x: 86, y: 46 }, { key: 'wristR', x: 14, y: 46 },
   { key: 'thighsL', x: 63, y: 60 }, { key: 'thighsR', x: 37, y: 60 },
   { key: 'calvesL', x: 64, y: 78 }, { key: 'calvesR', x: 36, y: 78 },
 ];
@@ -4172,11 +4174,17 @@ function setMeasurementsGender(g) {
   saveState();
   refreshMeasurementsDiagramModal();
 }
-function measureDotColor(key) {
+function measureDotState(key) {
   const todays = getTodaysMeasurementEntry();
-  if (todays && todays.values && todays.values[key] != null) return '#ff4d4d';
-  if (getLatestMeasurementValue(key)) return '#c62828';
-  return '#5c1f1f';
+  if (todays && todays.values && todays.values[key] != null) return 'today';
+  if (getLatestMeasurementValue(key)) return 'history';
+  return 'none';
+}
+function measureDotColor(key) {
+  const s = measureDotState(key);
+  if (s === 'today') return '#ff5c5c';   // logged today — bright, glowing
+  if (s === 'history') return '#e0342f'; // logged before — vivid red
+  return '#8a3a3a';                      // never logged — muted rust red, still visible on black
 }
 // Solid, filled anatomical silhouettes (front view only). Each body part
 // (torso, each arm, each leg) is its own closed path so limbs can stand
@@ -4190,7 +4198,7 @@ function bodyDiagramSvg() {
   const uri = gender === 'female' ? FEMALE_SILHOUETTE_URI : MALE_SILHOUETTE_URI;
   const dots = dotSet.map(d => {
     const label = MEASUREMENT_PARTS.find(p => p.key === d.key).label;
-    return `<div class="measure-dot" style="left:${d.x}%; top:${d.y}%; background:${measureDotColor(d.key)};"
+    return `<div class="measure-dot measure-dot-${measureDotState(d.key)}" style="left:${d.x}%; top:${d.y}%; background:${measureDotColor(d.key)};"
       onclick="openMeasurementPartModal('${d.key}')" title="${label}"></div>`;
   }).join('');
   return `
