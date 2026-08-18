@@ -374,8 +374,22 @@
   main { padding: 16px; }
   .card {
     background: var(--surface); border-radius: 16px; padding: 16px; margin-bottom: 12px;
-    border: 1px solid var(--border); box-shadow: var(--card-shadow);
+    border: 1px solid var(--border); box-shadow: var(--card-shadow); position: relative;
   }
+  /* Optional per-exercise reference image, top-right corner of the card.
+     Only ever rendered when an exercise has one set (see diagramThumbHtml) —
+     an exercise without one gets zero extra markup and zero layout change. */
+  .diagram-thumb-box {
+    position: absolute; top: 12px; right: 12px; width: 84px; height: 84px;
+    border-radius: 10px; overflow: hidden; border: 1px solid var(--border-strong);
+    background: var(--surface-raised); z-index: 1;
+  }
+  .diagram-thumb-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .diagram-crop-box {
+    position: relative; width: 100%; max-width: 320px; aspect-ratio: 1 / 1; margin: 0 auto;
+    overflow: hidden; border-radius: 14px; background: var(--surface-raised); touch-action: none;
+  }
+  .diagram-crop-box img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; cursor: grab; user-select: none; -webkit-user-drag: none; }
   .card h3 { margin: 0 0 6px 0; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
   .card-toggle-header { align-items: center; cursor: pointer; user-select: none; margin-bottom: 6px; }
   .card-toggle-header h3 { margin-bottom: 0; }
@@ -2582,7 +2596,7 @@ function getExerciseById(exId) {
 // duplicated objects for rendering/ordering purposes. Rest times are
 // deliberately left per-day — resting longer between sets on a heavier day is
 // a legitimate difference, not drift.
-const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'startWeight', 'failThreshold', 'notes', 'progressReps', 'progressSets', 'progressWeight', 'repIncrement', 'beltIncrement', 'timeIncrement', 'weightIncrement'];
+const LINKED_SYNC_FIELDS = ['name', 'mode', 'repLow', 'repHigh', 'setsMin', 'setsMax', 'sets', 'startReps', 'startSeconds', 'startWeight', 'failThreshold', 'notes', 'progressReps', 'progressSets', 'progressWeight', 'repIncrement', 'beltIncrement', 'timeIncrement', 'weightIncrement', 'diagramImageId', 'diagramPosX', 'diagramPosY', 'diagramZoom'];
 
 function getLinkedCopies(exId) {
   const copies = [];
@@ -3833,6 +3847,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
     const loggedLabel = logged ? formatLoggedEntry(logged) : targetLabel(ex);
     const ssColor = ex.supersetGroup ? getSupersetColor(day, ex.supersetGroup) : null;
     return `<div class="card done-today card-locked" style="border-left:3px solid ${day.color};${ssColor ? ` border-top:3px solid ${ssColor};` : ''}" id="card-${ex.id}">
+      ${diagramThumbHtml(ex)}
       ${ssColor ? `<div class="focus-eyebrow" style="color:${ssColor};">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)}</div>` : ''}
       <div class="row">
         <h3>✅ ${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>
@@ -3886,6 +3901,7 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
   const ssColor = ex.supersetGroup ? getSupersetColor(day, ex.supersetGroup) : null;
   const ssPartners = ex.supersetGroup ? getSupersetPartners(ex, day) : [];
   return `<div class="card ${doneToday?'done-today':''} ${highlighted?'card-focus':''}" style="border-left:3px solid ${day.color};${ssColor ? ` border-top:3px solid ${ssColor};` : ''}" id="card-${ex.id}">
+    ${diagramThumbHtml(ex)}
     ${ssColor ? `<div class="focus-eyebrow" style="color:${ssColor};">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)} — with ${ssPartners.map(p => escapeHtml(p.name)).join(', ')}</div>` : ''}
     ${highlighted ? `<div class="focus-eyebrow">Now training</div>` : ''}
     ${doneToday ? `<div class="focus-eyebrow" style="color:var(--danger);">Redo unlocked — this will add a second log entry</div>` : ''}
@@ -4564,6 +4580,191 @@ function migrateLegacyProgressPhotos() {
     })).catch(err => console.error('LiftLog photo migration error for', p.id, err)) // leave this one's dataUrl in place — it'll just retry next load
   )).then(() => saveState());
 }
+
+// ---------- WORKOUT DIAGRAMS (per-exercise reference image) ----------
+// A small optional image shown in the corner of an exercise's card during a
+// workout — e.g. a sketch of the movement or machine setup. Entirely
+// opt-in and added only from the exercise's edit screen in Manage, never
+// from the workout card itself: an exercise with no diagram gets zero
+// extra markup and renders exactly as before (see diagramThumbHtml).
+// Storage mirrors progress photos — the image blob lives in IndexedDB (see
+// MEDIA STORAGE above); only {diagramImageId, diagramPosX, diagramPosY,
+// diagramZoom} — a string and three small numbers — live on the exercise
+// config itself, so this can't reintroduce the localStorage-quota problem
+// no matter how many exercises end up with a diagram.
+const DIAGRAM_MAX_DIM = 700;
+const DIAGRAM_QUALITY = 0.75;
+
+// Renders nothing at all for an exercise with no diagram — the one thing
+// that has to hold for "no clutter if I choose not to add it."
+function diagramThumbHtml(ex) {
+  if (!ex.diagramImageId) return '';
+  const posX = ex.diagramPosX ?? 50, posY = ex.diagramPosY ?? 50, zoom = ex.diagramZoom ?? 1;
+  return `<div class="diagram-thumb-box" onclick="event.stopPropagation();">
+    <img data-media-id="${ex.diagramImageId}" src="${getMediaUrl(ex.diagramImageId)}"
+      style="object-position:${posX}% ${posY}%; transform:scale(${zoom});" alt="">
+  </div>`;
+}
+
+function addExerciseDiagramFromInput(inputEl, exId) {
+  const file = inputEl.files && inputEl.files[0];
+  inputEl.value = '';
+  if (!file) return;
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  compressImageToBlob(file, DIAGRAM_MAX_DIM, DIAGRAM_QUALITY).then(blob => {
+    const id = 'd' + Date.now() + Math.random().toString(36).slice(2, 7);
+    return idbPutMedia(id, blob).then(() => {
+      mediaUrlCache[id] = URL.createObjectURL(blob); // have it in hand already — no IndexedDB read-back needed to display it
+      const oldId = ex.diagramImageId;
+      ex.diagramImageId = id;
+      ex.diagramPosX = 50; ex.diagramPosY = 50; ex.diagramZoom = 1; // centered, no zoom — reasonable default before the user repositions
+      propagateLinkedExerciseConfig(ex);
+      persistDays();
+      saveState();
+      if (oldId) { idbDeleteMedia(oldId).catch(() => {}); revokeMediaUrl(oldId); } // replacing an existing diagram — clean up the old blob
+      refreshDiagramEditorSection(exId);
+      openExerciseDiagramReposition(exId); // straight into reposition — matches "the image i add should have ability to reposition"
+    });
+  }).catch(err => {
+    console.error('LiftLog diagram save error:', err);
+    alert("Couldn't process that image — try a different one.");
+  });
+}
+
+function removeExerciseDiagram(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex || !ex.diagramImageId) return;
+  showConfirm({
+    title: 'Remove workout diagram?',
+    message: 'Removes the reference image from this exercise.',
+    confirmLabel: 'Remove',
+    danger: true,
+    onConfirm: () => {
+      const oldId = ex.diagramImageId;
+      idbDeleteMedia(oldId).catch(err => console.error('LiftLog diagram delete error:', err)); // best-effort — proceed regardless
+      revokeMediaUrl(oldId);
+      delete ex.diagramImageId; delete ex.diagramPosX; delete ex.diagramPosY; delete ex.diagramZoom;
+      propagateLinkedExerciseConfig(ex);
+      persistDays();
+      saveState();
+      render();
+      refreshDiagramEditorSection(exId);
+    }
+  });
+}
+
+function diagramEditorSectionHtml(ex) {
+  if (!ex.diagramImageId) {
+    return `<div>
+      <div class="meta" style="margin:0 0 6px;">Workout Diagram (optional)</div>
+      <input type="file" accept="image/*" id="diagramFileInput_${ex.id}" style="display:none;" onchange="addExerciseDiagramFromInput(this, '${ex.id}')">
+      <button type="button" class="btn small secondary" onclick="document.getElementById('diagramFileInput_${ex.id}').click()">+ Add Image</button>
+    </div>`;
+  }
+  return `<div>
+    <div class="meta" style="margin:0 0 6px;">Workout Diagram</div>
+    <div class="row" style="gap:10px; align-items:center;">
+      <div class="diagram-thumb-box" style="position:static;">
+        <img data-media-id="${ex.diagramImageId}" src="${getMediaUrl(ex.diagramImageId)}"
+          style="object-position:${ex.diagramPosX ?? 50}% ${ex.diagramPosY ?? 50}%; transform:scale(${ex.diagramZoom ?? 1});" alt="">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <button type="button" class="btn small secondary" onclick="openExerciseDiagramReposition('${ex.id}')">Reposition</button>
+        <input type="file" accept="image/*" id="diagramFileInput_${ex.id}" style="display:none;" onchange="addExerciseDiagramFromInput(this, '${ex.id}')">
+        <button type="button" class="btn small secondary" onclick="document.getElementById('diagramFileInput_${ex.id}').click()">Replace</button>
+        <button type="button" class="btn small secondary" onclick="removeExerciseDiagram('${ex.id}')">🗑 Remove</button>
+      </div>
+    </div>
+  </div>`;
+}
+// Keeps the "Edit exercise" modal's diagram section in sync after an add/
+// reposition/remove, without touching the rest of that modal's (possibly
+// unsaved) fields — those two flows are intentionally independent, the same
+// way progress photos commit immediately rather than waiting on a form Save.
+function refreshDiagramEditorSection(exId) {
+  const container = document.getElementById(`diagramEditorSection_${exId}`);
+  if (!container) return; // edit-exercise modal isn't open — nothing to refresh
+  const ex = getExerciseById(exId);
+  if (!ex) return;
+  container.innerHTML = diagramEditorSectionHtml(ex);
+}
+
+function openExerciseDiagramReposition(exId) {
+  const ex = getExerciseById(exId);
+  if (!ex || !ex.diagramImageId) return;
+  const existingOverlay = document.getElementById('diagramRepositionOverlay');
+  if (existingOverlay) existingOverlay.remove();
+  let posX = ex.diagramPosX ?? 50, posY = ex.diagramPosY ?? 50, zoom = ex.diagramZoom ?? 1;
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'diagramRepositionOverlay';
+  overlay.style.zIndex = 220;
+  overlay.innerHTML = `
+    <div class="confirm-modal" style="max-width:360px;">
+      <h3>Reposition diagram</h3>
+      <div class="meta" style="margin-top:2px; margin-bottom:0;">Drag to move, use the slider to zoom. Works the same regardless of the image's original size or shape.</div>
+      <div class="diagram-crop-box" id="diagramCropBox" style="margin-top:12px;">
+        <img id="diagramCropImg" data-media-id="${ex.diagramImageId}" src="${getMediaUrl(ex.diagramImageId)}"
+          style="object-position:${posX}% ${posY}%; transform:scale(${zoom});" alt="">
+      </div>
+      <div class="row" style="align-items:center; gap:10px; margin-top:14px;">
+        <span class="meta" style="margin:0;">🔍</span>
+        <input type="range" id="diagramZoomSlider" min="100" max="250" value="${Math.round(zoom * 100)}" style="flex:1;">
+      </div>
+      <div class="row" style="margin-top:16px; gap:8px;">
+        <button class="btn secondary" id="diagramRepoCancelBtn" style="flex:1;">Cancel</button>
+        <button class="btn" id="diagramRepoSaveBtn" style="flex:1;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const box = overlay.querySelector('#diagramCropBox');
+  const img = overlay.querySelector('#diagramCropImg');
+  const slider = overlay.querySelector('#diagramZoomSlider');
+  const applyStyle = () => { img.style.objectPosition = `${posX}% ${posY}%`; img.style.transform = `scale(${zoom})`; };
+
+  let dragging = false, lastX = 0, lastY = 0;
+  const onDown = (e) => {
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    img.style.cursor = 'grabbing';
+    img.setPointerCapture && e.pointerId != null && img.setPointerCapture(e.pointerId);
+  };
+  const onMove = (e) => {
+    if (!dragging) return;
+    const rect = box.getBoundingClientRect();
+    const dx = (e.clientX - lastX) / rect.width * 100;
+    const dy = (e.clientY - lastY) / rect.height * 100;
+    // Dragging right/down should reveal more of the image's left/top — i.e.
+    // move the visible anchor the opposite way from the finger/cursor.
+    posX = Math.min(100, Math.max(0, posX - dx));
+    posY = Math.min(100, Math.max(0, posY - dy));
+    lastX = e.clientX; lastY = e.clientY;
+    applyStyle();
+  };
+  const onUp = () => { dragging = false; img.style.cursor = 'grab'; };
+  img.addEventListener('pointerdown', onDown);
+  img.addEventListener('pointermove', onMove);
+  img.addEventListener('pointerup', onUp);
+  img.addEventListener('pointercancel', onUp);
+  slider.oninput = () => { zoom = slider.value / 100; applyStyle(); };
+
+  const close = () => overlay.remove();
+  overlay.querySelector('#diagramRepoCancelBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#diagramRepoSaveBtn').onclick = () => {
+    ex.diagramPosX = Math.round(posX);
+    ex.diagramPosY = Math.round(posY);
+    ex.diagramZoom = Math.round(zoom * 100) / 100;
+    propagateLinkedExerciseConfig(ex);
+    persistDays();
+    saveState();
+    close();
+    render();
+    refreshDiagramEditorSection(exId);
+  };
+}
+
 function updateCompareSlider(val) {
   const img = document.getElementById('compareBeforeImg');
   const handle = document.getElementById('compareHandle');
@@ -6461,6 +6662,7 @@ function openExerciseEditor(exId, dayIdx) {
       <h3>Edit exercise</h3>
       <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
         <label style="${lbl}">Name<input type="text" id="editExName" value="${escapeHtml(ex.name)}"></label>
+        <div id="diagramEditorSection_${ex.id}">${diagramEditorSectionHtml(ex)}</div>
         ${fieldsHtml}
         <div class="row" style="gap:10px;">
           <label style="${lbl}">Rest between sets (s)<input type="number" id="editExRestBetween" value="${ex.rest}"></label>
