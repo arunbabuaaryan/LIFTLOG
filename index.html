@@ -2202,6 +2202,32 @@ function renderPreservingScroll(preferredAnchorId) {
   restoreScrollAnchor(anchor);
 }
 
+// Card-scoped alternative to renderPreservingScroll(`card-${exId}`), used for
+// the single highest-frequency tap in an active workout: marking a set done
+// (see markSetDone). Regenerates just that exercise's card via the same
+// renderExerciseCard() function render() itself uses, and swaps only that
+// DOM node in place — nothing outside the card is touched, so there's no
+// scroll-jump to correct for in the first place (no anchor capture/restore
+// needed at all, unlike the full-page path above). Falls back to the full
+// scroll-preserving render if the card isn't in the DOM for any reason
+// (wrong view, Focus Mode already moved to a different exercise, etc.) so
+// this is a strictly additive fast path, never a place things can go
+// missing.
+function patchExerciseCard(exId) {
+  if (view !== 'workout') { renderPreservingScroll(`card-${exId}`); return; }
+  const oldEl = document.getElementById(`card-${exId}`);
+  const ex = getExerciseById(exId);
+  const day = DAYS[currentDayIdx];
+  if (!oldEl || !ex || !day) { renderPreservingScroll(`card-${exId}`); return; }
+  const highlighted = oldEl.classList.contains('card-focus');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = renderExerciseCard(ex, day, { highlighted });
+  const newEl = wrap.firstElementChild;
+  if (!newEl) { renderPreservingScroll(`card-${exId}`); return; }
+  oldEl.replaceWith(newEl);
+  syncWorkoutWakeLock();
+}
+
 function setChartMetric(m) {
   chartMetric = m;
   renderCharts();
@@ -2904,12 +2930,14 @@ function markSetDone(exId, setIdx) {
     fab.style.display = 'none';
     fab.classList.remove('urgent');
   }
-  renderPreservingScroll(`card-${exId}`);
+  patchExerciseCard(exId);
   persistLiveSets(exId);
 
   // Jump straight to the partner's matching set (List Mode scrolls to it,
   // Focus Mode switches to it) — done after the render/persist above so the
   // just-logged set's own green "done" state is visible for a beat first.
+  // focusOnExercise does its own full render when it switches the active
+  // card, so this is unaffected by the card-scoped patch above.
   if (pendingPartner) focusOnExercise(pendingPartner.id);
 
   const allDone = arr.every(x => x.doneMark);
@@ -4309,25 +4337,126 @@ function getSymmetryChecks() {
   });
 }
 
+// ---------- MEDIA STORAGE (IndexedDB) ----------
+// Progress-photo (and, later, workout-diagram) image blobs live here instead
+// of inline in `state`/localStorage. localStorage has a hard ~5-10MB quota
+// shared with all the rest of the app's data and gets re-serialized on
+// *every* saveState() call, so a handful of base64 photos in there risked
+// silently breaking every save once the quota was hit. IndexedDB gives
+// PWAs a much larger budget and stores binary blobs natively — no base64
+// inflation, no coupling to unrelated saves.
+const MEDIA_DB_NAME = 'liftlog_media_db';
+const MEDIA_DB_VERSION = 1;
+const MEDIA_STORE_NAME = 'photos';
+let _mediaDbPromise = null;
+function openMediaDb() {
+  if (_mediaDbPromise) return _mediaDbPromise;
+  _mediaDbPromise = new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('IndexedDB not available on this browser')); return; }
+    const req = indexedDB.open(MEDIA_DB_NAME, MEDIA_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(MEDIA_STORE_NAME)) db.createObjectStore(MEDIA_STORE_NAME);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('Could not open media database'));
+  });
+  return _mediaDbPromise;
+}
+function idbPutMedia(id, blob) {
+  return openMediaDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(MEDIA_STORE_NAME, 'readwrite');
+    tx.objectStore(MEDIA_STORE_NAME).put(blob, id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Could not save image'));
+  }));
+}
+function idbGetMedia(id) {
+  return openMediaDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(MEDIA_STORE_NAME, 'readonly');
+    const req = tx.objectStore(MEDIA_STORE_NAME).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error || new Error('Could not load image'));
+  }));
+}
+function idbDeleteMedia(id) {
+  return openMediaDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(MEDIA_STORE_NAME, 'readwrite');
+    tx.objectStore(MEDIA_STORE_NAME).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Could not delete image'));
+  }));
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Could not read image'));
+    reader.readAsDataURL(blob);
+  });
+}
+function dataUrlToBlob(dataUrl) {
+  return fetch(dataUrl).then(r => r.blob());
+}
+
+// In-memory cache of media id -> object URL. Populated lazily so the
+// (synchronous) render pipeline never has to await an IndexedDB read: a
+// not-yet-cached image renders as a 1x1 transparent placeholder, and the
+// moment its blob finishes loading the already-painted DOM nodes for that
+// id get their src/background-image patched directly in place — no
+// render()/renderPreservingScroll() call involved.
+const mediaUrlCache = {};
+const MEDIA_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBTAA7';
+function getMediaUrl(id) {
+  if (mediaUrlCache[id]) return mediaUrlCache[id];
+  loadMediaIntoCache(id);
+  return MEDIA_PLACEHOLDER;
+}
+function loadMediaIntoCache(id) {
+  if (mediaUrlCache[id] === null) return; // already tried + missing, don't hammer IndexedDB on every render
+  idbGetMedia(id).then(blob => {
+    if (!blob) { mediaUrlCache[id] = null; return; }
+    mediaUrlCache[id] = URL.createObjectURL(blob);
+    patchMediaNodesInPlace(id, mediaUrlCache[id]);
+  }).catch(() => { /* leave uncached; will retry on next render pass that asks for it */ });
+}
+function patchMediaNodesInPlace(id, url) {
+  document.querySelectorAll(`[data-media-id="${id}"]`).forEach(el => {
+    if (el.tagName === 'IMG') el.src = url;
+    else el.style.backgroundImage = `url('${url}')`;
+  });
+}
+function revokeMediaUrl(id) {
+  if (mediaUrlCache[id]) { URL.revokeObjectURL(mediaUrlCache[id]); }
+  delete mediaUrlCache[id];
+}
+
 // ---------- PROGRESS PHOTOS ----------
-// Stored as compressed JPEG data URLs directly in state (there's no backend
-// — everything lives in localStorage and rides along in the normal JSON
-// backup/export). Compression keeps each photo small since localStorage
-// has a hard quota (~5-10MB depending on the browser) shared with all the
-// rest of the app's data.
+// Photo *metadata* (id/date/byte size) lives in state.progressPhotos and
+// rides along in the normal JSON backup; the actual image bytes live in
+// IndexedDB (see MEDIA STORAGE above), keeping localStorage small regardless
+// of how many photos exist.
 const PROGRESS_PHOTO_MAX_DIM = 900;
 const PROGRESS_PHOTO_QUALITY = 0.72;
 function getProgressPhotos() {
   return (state.progressPhotos || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
 }
+function getProgressPhotoUrl(id) {
+  // Not-yet-migrated photos (see migrateLegacyProgressPhotos) still carry
+  // their original dataUrl right on the metadata — use it directly rather
+  // than waiting on a migration that may not have run yet.
+  const meta = (state.progressPhotos || []).find(p => p.id === id);
+  if (meta && meta.dataUrl) return meta.dataUrl;
+  return getMediaUrl(id);
+}
 function getProgressPhotosStorageBytes() {
-  return (state.progressPhotos || []).reduce((sum, p) => sum + (p.dataUrl ? p.dataUrl.length * 0.75 : 0), 0);
+  return (state.progressPhotos || []).reduce((sum, p) => sum + (p.bytes || (p.dataUrl ? p.dataUrl.length * 0.75 : 0)), 0);
 }
 function fmtBytes(bytes) {
   if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
-function compressImageToDataUrl(file, maxDim, quality) {
+function compressImageToBlob(file, maxDim, quality) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -4340,7 +4469,7 @@ function compressImageToDataUrl(file, maxDim, quality) {
         canvas.width = width; canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not compress that image')), 'image/jpeg', quality);
       };
       img.onerror = () => reject(new Error('Could not read that image'));
       img.src = e.target.result;
@@ -4353,12 +4482,19 @@ function addProgressPhotoFromInput(inputEl) {
   const file = inputEl.files && inputEl.files[0];
   inputEl.value = '';
   if (!file) return;
-  compressImageToDataUrl(file, PROGRESS_PHOTO_MAX_DIM, PROGRESS_PHOTO_QUALITY).then(dataUrl => {
-    state.progressPhotos = state.progressPhotos || [];
-    state.progressPhotos.push({ id: 'p' + Date.now() + Math.random().toString(36).slice(2, 7), date: new Date().toISOString(), dataUrl });
-    saveState();
-    render();
-  }).catch(() => alert("Couldn't process that photo — try a different one."));
+  compressImageToBlob(file, PROGRESS_PHOTO_MAX_DIM, PROGRESS_PHOTO_QUALITY).then(blob => {
+    const id = 'p' + Date.now() + Math.random().toString(36).slice(2, 7);
+    return idbPutMedia(id, blob).then(() => {
+      mediaUrlCache[id] = URL.createObjectURL(blob); // have it in hand already — no IndexedDB read-back needed to display it
+      state.progressPhotos = state.progressPhotos || [];
+      state.progressPhotos.push({ id, date: new Date().toISOString(), bytes: blob.size });
+      saveState();
+      render();
+    });
+  }).catch(err => {
+    console.error('LiftLog photo save error:', err);
+    alert("Couldn't process that photo — try a different one.");
+  });
 }
 function deleteProgressPhoto(id) {
   showConfirm({
@@ -4367,6 +4503,8 @@ function deleteProgressPhoto(id) {
     confirmLabel: 'Delete',
     danger: true,
     onConfirm: () => {
+      idbDeleteMedia(id).catch(err => console.error('LiftLog photo delete error:', err)); // best-effort — proceed regardless so a stuck IndexedDB write never blocks the user's delete
+      revokeMediaUrl(id);
       state.progressPhotos = (state.progressPhotos || []).filter(p => p.id !== id);
       saveState();
       const overlay = document.getElementById('photoViewOverlay');
@@ -4379,7 +4517,7 @@ function progressPhotosGridHtml() {
   const photos = getProgressPhotos().slice().reverse();
   if (!photos.length) return `<div class="empty" style="padding:10px 0;">No progress photos yet — tap "+ Add Photo" to start a visual record.</div>`;
   return `<div class="photo-grid">${photos.map(p => `
-    <div class="photo-thumb" style="background-image:url('${p.dataUrl}');" onclick="openPhotoViewModal('${p.id}')">
+    <div class="photo-thumb" data-media-id="${p.id}" style="background-image:url('${getProgressPhotoUrl(p.id)}');" onclick="openPhotoViewModal('${p.id}')">
       <span class="photo-thumb-date">${new Date(p.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
     </div>`).join('')}</div>`;
 }
@@ -4394,7 +4532,7 @@ function openPhotoViewModal(id) {
   overlay.style.zIndex = 215;
   overlay.innerHTML = `
     <div class="confirm-modal" style="max-width:420px; padding:12px;">
-      <img src="${photo.dataUrl}" style="width:100%; border-radius:12px; display:block;" alt="Progress photo">
+      <img data-media-id="${photo.id}" src="${getProgressPhotoUrl(photo.id)}" style="width:100%; border-radius:12px; display:block;" alt="Progress photo">
       <div class="row" style="margin-top:10px; align-items:center;">
         <span class="meta" style="margin:0; flex:1;">${new Date(photo.date).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}</span>
         <button class="btn small secondary" onclick="deleteProgressPhoto('${photo.id}')">🗑 Delete</button>
@@ -4405,6 +4543,26 @@ function openPhotoViewModal(id) {
   const close = () => overlay.remove();
   overlay.querySelector('#photoViewCloseBtn').onclick = close;
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+}
+// One-time migration: earlier versions stored photos as base64 data URLs
+// directly in state.progressPhotos (localStorage), which risked hitting the
+// origin's quota. Moves each legacy photo's bytes into IndexedDB and slims
+// the metadata left in state down to {id, date, bytes}. getProgressPhotoUrl()
+// already reads a lingering `.dataUrl` directly, so photos display correctly
+// on the very first load, before this has even finished — this just moves
+// them off localStorage in the background. No-op once nothing has a
+// dataUrl left; safe to call on every boot.
+function migrateLegacyProgressPhotos() {
+  const legacy = (state.progressPhotos || []).filter(p => p.dataUrl);
+  if (!legacy.length) return;
+  Promise.all(legacy.map(p =>
+    dataUrlToBlob(p.dataUrl).then(blob => idbPutMedia(p.id, blob).then(() => {
+      mediaUrlCache[p.id] = URL.createObjectURL(blob);
+      p.bytes = blob.size;
+      delete p.dataUrl;
+      patchMediaNodesInPlace(p.id, mediaUrlCache[p.id]);
+    })).catch(err => console.error('LiftLog photo migration error for', p.id, err)) // leave this one's dataUrl in place — it'll just retry next load
+  )).then(() => saveState());
 }
 function updateCompareSlider(val) {
   const img = document.getElementById('compareBeforeImg');
@@ -4436,8 +4594,8 @@ function openPhotoCompareModal() {
         </select>
       </div>
       <div class="compare-wrap" style="margin-top:12px;">
-        <img class="compare-img" src="${after.dataUrl}" alt="After">
-        <img class="compare-img" id="compareBeforeImg" src="${before.dataUrl}" style="clip-path: inset(0 50% 0 0);" alt="Before">
+        <img class="compare-img" data-media-id="${after.id}" src="${getProgressPhotoUrl(after.id)}" alt="After">
+        <img class="compare-img" id="compareBeforeImg" data-media-id="${before.id}" src="${getProgressPhotoUrl(before.id)}" style="clip-path: inset(0 50% 0 0);" alt="Before">
         <div class="compare-handle" id="compareHandle" style="left:50%;"></div>
       </div>
       <input type="range" min="0" max="100" value="50" style="width:100%; margin-top:10px;" oninput="updateCompareSlider(this.value)">
@@ -7185,7 +7343,8 @@ async function driveSyncNow(silent) {
   }
 
   try {
-    const json = JSON.stringify(state, null, 2);
+    const backupState = await buildBackupState().catch(() => state);
+    const json = JSON.stringify(backupState, null, 2);
     const fileId = await findOrCreateDriveFileId();
     const metadata = { name: DRIVE_BACKUP_FILENAME, mimeType: 'application/json' };
     const boundary = 'liftlog_boundary';
@@ -7253,6 +7412,7 @@ async function restoreFromDriveNow() {
         hydrateDaysFromState(); // runs any migrations this backup needs and refreshes DAYS to match
         saveState();
         render();
+        migrateLegacyProgressPhotos(); // restored backup's photos (if any) are embedded as dataUrls — push them into IndexedDB on this device
         alert('✅ Restored from Google Drive.');
       } catch (e) {
         alert('Restore failed — check your connection and try again.');
@@ -7360,14 +7520,36 @@ function editBackupFolder() {
   alert(`Backups will now attempt to save to Downloads/${clean}/\nNote: on some Chrome versions, nested subfolders may not be created automatically — if that happens, the file will just land directly in Downloads instead. Worth checking once on your phone after changing this.`);
 }
 
-function makeBackupFile() {
+function makeBackupFile(backupState) {
   const stamp = new Date().toISOString().slice(0,10);
-  const json = JSON.stringify(state, null, 2);
+  const json = JSON.stringify(backupState || state, null, 2);
   return new File([json], `${getBackupFolderName()}/liftlog-backup-${stamp}.json`, { type: 'application/json' });
 }
 
-function exportBackup() {
-  const file = makeBackupFile();
+// Photo image bytes live in IndexedDB now (see MEDIA STORAGE), not inline in
+// `state` — so a plain JSON.stringify(state) backup would silently drop
+// progress photos. This re-embeds each photo as a base64 dataUrl into a
+// *cloned* snapshot, for export purposes only — it never touches the live
+// `state` object, so localStorage stays lean regardless of how many backups
+// get made. Photos that fail to load are skipped rather than failing the
+// whole backup.
+function buildBackupState() {
+  const photos = state.progressPhotos || [];
+  return Promise.all(photos.map(p => {
+    if (p.dataUrl) return Promise.resolve(p); // not yet migrated off localStorage — already embedded
+    return idbGetMedia(p.id)
+      .then(blob => blob ? blobToDataUrl(blob).then(dataUrl => ({ ...p, dataUrl })) : p)
+      .catch(() => p);
+  })).then(embeddedPhotos => ({ ...state, progressPhotos: embeddedPhotos }));
+}
+
+// Fast, fully synchronous path — used ONLY by autoBackupOnWorkoutComplete,
+// which must stay inside the same user-gesture call stack as the tap that
+// finished the exercise (see comment there) or mobile browsers may block
+// the download as an unsolicited background one. This snapshot carries only
+// photo metadata (id/date/bytes), not the image bytes themselves.
+function exportBackupSync() {
+  const file = makeBackupFile(state);
   const url = URL.createObjectURL(file);
   const a = document.createElement('a');
   a.href = url; a.download = file.name;
@@ -7378,8 +7560,29 @@ function exportBackup() {
   saveState();
 }
 
+// Manual "Download" button — always a direct response to a tap, so the
+// brief async wait to re-embed photos is safe (no gesture-chain constraint
+// like the auto-backup path above).
+function exportBackup() {
+  buildBackupState().then(backupState => {
+    const file = makeBackupFile(backupState);
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url; a.download = file.name;
+    a.click();
+    URL.revokeObjectURL(url);
+    state.meta = state.meta || {};
+    state.meta.lastBackup = new Date().toISOString();
+    saveState();
+  }).catch(err => {
+    console.error('LiftLog backup error:', err);
+    alert('Could not prepare backup: ' + (err.message || err));
+  });
+}
+
 async function shareBackup() {
-  const file = makeBackupFile();
+  const backupState = await buildBackupState().catch(() => state);
+  const file = makeBackupFile(backupState);
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: 'LiftLog Backup' });
@@ -7419,14 +7622,14 @@ function daysSinceLastDriveSync() {
 
 // Fires automatically the moment every exercise in a workout group is
 // finished (see finishExerciseConfirmed), unless the user has turned the
-// toggle off in Manage. Deliberately reuses exportBackup() itself — the
-// exact same file-writing path as the manual Download button — so there's
-// only one place that ever writes a backup file, and auto/manual backups
-// are provably identical in format.
+// toggle off in Manage. Uses exportBackupSync() rather than the manual
+// Download button's exportBackup() — same JSON/file-writing shape, but
+// synchronous (no photo re-embedding) so the download stays inside the
+// same user-gesture call stack as the tap that finished the exercise.
 function autoBackupOnWorkoutComplete() {
   if (!getAutoBackupOnComplete()) return false;
   try {
-    exportBackup();
+    exportBackupSync();
     return true;
   } catch (e) {
     return false; // fail silently — the manual backup buttons are still there as a fallback
@@ -7453,6 +7656,7 @@ function importBackup(event) {
           hydrateDaysFromState(); // runs any migrations this backup needs and refreshes DAYS to match
           saveState();
           render();
+          migrateLegacyProgressPhotos(); // imported backup's photos (if any) are embedded as dataUrls — push them into IndexedDB on this device
           alert('Backup restored.');
         }
       });
@@ -7472,6 +7676,7 @@ if (isTestMode()) {
 }
 updateEditDefaultsBanner();
 render();
+migrateLegacyProgressPhotos();
 setTimeout(maybeNotifyMeasurementReminder, 1500);
 // Extra safety net: closing the tab/PWA mid-set with unfinished progress is
 // an easy accident. Most mobile browsers won't show a custom dialog here,
