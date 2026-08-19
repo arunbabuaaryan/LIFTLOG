@@ -583,6 +583,12 @@
   .measure-dot:active { transform: scale(0.85); }
   .measure-dot-none { border-color: rgba(255,255,255,0.4); }
   .measure-dot-today { box-shadow: 0 0 0 4px rgba(255,82,82,0.35), 0 1px 4px rgba(0,0,0,0.6); }
+  .measure-dot-value {
+    position: absolute; transform: translate(-50%, 10px); font-size: 8.5px; font-weight: 700;
+    color: #fff; background: rgba(0,0,0,0.72); padding: 1px 4px; border-radius: 5px;
+    pointer-events: none; white-space: nowrap; line-height: 1.3;
+  }
+  .m60-change { padding: 2px 9px 0; font-size: 10px; color: var(--text-faint); font-weight: 600; }
   .measure-grid {
     display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 10px;
   }
@@ -4279,16 +4285,22 @@ const MEASUREMENT_PARTS = [
   { key: 'chestLats', label: 'Chest / Lats' },
   { key: 'waist', label: 'Waist' },
   { key: 'hips', label: 'Hips' },
-  { key: 'armsL', label: 'Left Arm' },
   { key: 'armsR', label: 'Right Arm' },
-  { key: 'forearmsL', label: 'Left Forearm' },
+  { key: 'armsL', label: 'Left Arm' },
   { key: 'forearmsR', label: 'Right Forearm' },
-  { key: 'wristL', label: 'Left Wrist' },
+  { key: 'forearmsL', label: 'Left Forearm' },
   { key: 'wristR', label: 'Right Wrist' },
-  { key: 'thighsL', label: 'Left Thigh' },
+  { key: 'wristL', label: 'Left Wrist' },
   { key: 'thighsR', label: 'Right Thigh' },
-  { key: 'calvesL', label: 'Left Calf' },
+  { key: 'thighsL', label: 'Left Thigh' },
   { key: 'calvesR', label: 'Right Calf' },
+  { key: 'calvesL', label: 'Left Calf' },
+];
+// Body parts that come in left/right pairs, in the order they should be
+// displayed together (right first, then left) — see measurementsGridHtml.
+const MEASUREMENT_LR_PAIRS = [
+  ['armsR', 'armsL'], ['forearmsR', 'forearmsL'], ['wristR', 'wristL'],
+  ['thighsR', 'thighsL'], ['calvesR', 'calvesL'],
 ];
 const CM_PER_IN = 2.54;
 function cmToIn(cm) { return cm / CM_PER_IN; }
@@ -4332,6 +4344,29 @@ function getMeasurementTrend(key) {
   const previous = hist.length > 1 ? hist[hist.length - 2] : null;
   const change = previous ? fmtMeasure1(latest.value - previous.value) : null;
   return { latest, previous, change };
+}
+// % change vs. the entry logged ~60 days before the latest one, for that
+// body part. If there's no entry that old yet, falls back to the oldest
+// entry on file instead — so a comparison still shows up before 60 days of
+// history exist — but never reaches further back than 60 days when an
+// entry near that mark is actually available.
+function getMeasurement60DayChange(key) {
+  const hist = getMeasurementHistoryForPart(key);
+  if (hist.length < 2) return null;
+  const latest = hist[hist.length - 1];
+  const latestTime = new Date(latest.date).getTime();
+  const targetTime = latestTime - 60 * 24 * 60 * 60 * 1000;
+  let baseline = null;
+  for (let i = hist.length - 2; i >= 0; i--) {
+    if (new Date(hist[i].date).getTime() <= targetTime) { baseline = hist[i]; break; }
+  }
+  if (!baseline) baseline = hist[0];
+  if (baseline === latest || !baseline.value) return null;
+  const days = Math.round((latestTime - new Date(baseline.date).getTime()) / (24 * 60 * 60 * 1000));
+  if (days < 1) return null;
+  const pct = Math.round(((latest.value - baseline.value) / baseline.value) * 1000) / 10;
+  const pctText = `${pct > 0 ? '▲+' : pct < 0 ? '▼' : '–'}${Math.abs(pct)}%`;
+  return { pct, pctText, days };
 }
 
 // ---------- LEFT / RIGHT SYMMETRY ----------
@@ -4594,6 +4629,28 @@ function migrateLegacyProgressPhotos() {
 // no matter how many exercises end up with a diagram.
 const DIAGRAM_MAX_DIM = 700;
 const DIAGRAM_QUALITY = 0.75;
+// Exercise diagram images additionally get saved as an actual file in the
+// phone's Downloads/liftlog/ folder — a genuine local backup copy, separate
+// from and in addition to the IndexedDB copy the app actually displays from.
+// Uses the same download-trigger mechanism as the JSON backups already do;
+// this is best-effort (a failure here never blocks the image from saving to
+// IndexedDB, which is what the app itself depends on).
+const LOCAL_IMAGE_BACKUP_FOLDER = 'liftlog/backup';
+function downloadImageBlobLocally(blob, filename) {
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${LOCAL_IMAGE_BACKUP_FOLDER}/${filename}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('LiftLog local image backup error:', err); // non-fatal — the image is already safe in IndexedDB either way
+  }
+}
+function slugifyForFilename(name) {
+  return (name || 'exercise').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'exercise';
+}
 
 // Renders nothing at all for an exercise with no diagram — the one thing
 // that has to hold for "no clutter if I choose not to add it."
@@ -4623,6 +4680,7 @@ function addExerciseDiagramFromInput(inputEl, exId) {
       persistDays();
       saveState();
       if (oldId) { idbDeleteMedia(oldId).catch(() => {}); revokeMediaUrl(oldId); } // replacing an existing diagram — clean up the old blob
+      downloadImageBlobLocally(blob, `${slugifyForFilename(ex.name)}-diagram.jpg`);
       refreshDiagramEditorSection(exId);
       openExerciseDiagramReposition(exId); // straight into reposition — matches "the image i add should have ability to reposition"
     });
@@ -5000,7 +5058,106 @@ function openBodyFatTrendModal() {
   }
 }
 
-// ---------- MEASUREMENT REMINDERS ----------
+// ---------- BMI ----------
+// Standard weight(kg) / height(m)^2. Needs a logged bodyweight entry plus
+// the same height value used for the body-fat % estimate above (set once
+// via openHeightModal()) — this app doesn't track height changing over
+// time, so every BMI value uses whatever height is on file now.
+function calcBmi(weightLb, heightCm) {
+  const kg = lbToKg(weightLb);
+  const m = heightCm / 100;
+  return kg / (m * m);
+}
+function bmiCategory(bmi) {
+  if (bmi < 18.5) return 'Underweight';
+  if (bmi < 25) return 'Normal';
+  if (bmi < 30) return 'Overweight';
+  return 'Obese';
+}
+function getBmiEstimate() {
+  const height = getUserHeightCm();
+  if (!height) return null;
+  const log = getBodyweightLog();
+  if (!log.length) return null;
+  const latest = log[log.length - 1];
+  const bmi = calcBmi(latest.weight, height);
+  return { value: fmtMeasure1(bmi), category: bmiCategory(bmi), asOf: latest.date };
+}
+// One BMI value per bodyweight log entry, using the height on file — same
+// "recompute the whole series from current height" approach as body fat.
+function getBmiHistory() {
+  const height = getUserHeightCm();
+  if (!height) return [];
+  return getBodyweightLog().map(e => ({ date: e.date, value: fmtMeasure1(calcBmi(e.weight, height)) }));
+}
+let bmiChartRef = null;
+function openBmiTrendModal() {
+  const hist = getBmiHistory();
+  const est = getBmiEstimate();
+  if (!hist.length && !est) return;
+  const existing = document.getElementById('bmiTrendOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+  overlay.id = 'bmiTrendOverlay';
+  overlay.style.zIndex = 215;
+  const rows = hist.slice().reverse().map((h, i) => {
+    const prev = hist[hist.length - 2 - i];
+    const d = prev ? fmtMeasure1(h.value - prev.value) : null;
+    const dHtml = d != null ? `<span class="mdelta">${d > 0 ? '▲' : d < 0 ? '▼' : '–'}${Math.abs(d)}</span>` : '';
+    return `<div class="histitem row" style="padding:6px 0;">
+      <span class="meta" style="margin:0;">${new Date(h.date).toLocaleDateString()}: <strong>${fmtMeasure1(h.value)}</strong> (${bmiCategory(h.value)})</span>
+      ${dHtml}
+    </div>`;
+  }).join('');
+  overlay.innerHTML = `
+    <div class="confirm-modal measure-modal">
+      <h3>📊 BMI Trend</h3>
+      <div class="meta" style="margin-bottom:0;">Weight ÷ height², using the height on file. One point per bodyweight log entry.</div>
+      ${hist.length >= 2 ? `<div style="position:relative; height:180px; margin-top:12px;"><canvas id="bmiChart"></canvas></div>` : ''}
+      <div class="meta" style="margin-top:14px; margin-bottom:4px;">History</div>
+      <div style="max-height:220px; overflow-y:auto;">${rows || '<div class="empty" style="padding:8px 0;">No entries yet.</div>'}</div>
+      <div class="row" style="margin-top:16px;">
+        <button class="btn secondary" id="bmiTrendCloseBtn" style="flex:1;">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => {
+    if (bmiChartRef) { bmiChartRef.destroy(); bmiChartRef = null; }
+    overlay.remove();
+  };
+  overlay.querySelector('#bmiTrendCloseBtn').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  if (hist.length >= 2 && typeof Chart !== 'undefined') {
+    setTimeout(() => {
+      const canvas = document.getElementById('bmiChart');
+      if (!canvas) return;
+      const cssVars = getComputedStyle(document.documentElement);
+      const textFaintColor = cssVars.getPropertyValue('--text-faint').trim() || '#565b6c';
+      const gridColor = cssVars.getPropertyValue('--border-strong').trim() || 'rgba(255,255,255,.12)';
+      bmiChartRef = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: hist.map(h => new Date(h.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
+          datasets: [{
+            data: hist.map(h => h.value),
+            borderColor: '#5c9eff', backgroundColor: '#5c9eff22',
+            borderWidth: 2.5, pointRadius: 3, pointBackgroundColor: '#5c9eff',
+            tension: 0.25, fill: true,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: textFaintColor, maxTicksLimit: 6 }, grid: { color: gridColor } },
+            y: { ticks: { color: textFaintColor }, grid: { color: gridColor } }
+          }
+        }
+      });
+    }, 0);
+  }
+}
 // Purely local/in-app: there's no backend to push notifications while the
 // app is closed, so the reliable mechanism is a banner shown when the app
 // is opened after 4+ weeks. If notification permission already happens to
@@ -5182,8 +5339,11 @@ function bodyDiagramSvg() {
   const uri = gender === 'female' ? FEMALE_SILHOUETTE_URI : MALE_SILHOUETTE_URI;
   const dots = dotSet.map(d => {
     const label = MEASUREMENT_PARTS.find(p => p.key === d.key).label;
+    const latest = getLatestMeasurementValue(d.key);
+    const valueLabel = latest
+      ? `<div class="measure-dot-value" style="left:${d.x}%; top:${d.y}%;">${fmtMeasure1(latest.value)}</div>` : '';
     return `<div class="measure-dot measure-dot-${measureDotState(d.key)}" style="left:${d.x}%; top:${d.y}%; background:${measureDotColor(d.key)};"
-      onclick="openMeasurementPartModal('${d.key}')" title="${label}"></div>`;
+      onclick="openMeasurementPartModal('${d.key}')" title="${label}"></div>${valueLabel}`;
   }).join('');
   return `
   <div class="measure-body-wrap">
@@ -5191,34 +5351,53 @@ function bodyDiagramSvg() {
     ${dots}
   </div>`;
 }
+// Body parts that don't come in left/right pairs — rendered in their own
+// grid so the paired parts below always start a fresh row (see
+// MEASUREMENT_LR_PAIRS above and measurementsGridHtml below). Otherwise an
+// odd count here would push every pair out of alignment by one cell.
+const MEASUREMENT_SINGLE_KEYS = ['neck', 'shoulders', 'chestLats', 'waist', 'hips'];
+function measurementRowHtml(p) {
+  const latest = getLatestMeasurementValue(p.key);
+  const trend = latest ? getMeasurementTrend(p.key) : null;
+  const delta = trend && trend.change != null
+    ? `<span class="mdelta">${trend.change > 0 ? '▲' : trend.change < 0 ? '▼' : '–'}${Math.abs(trend.change)}</span>`
+    : '';
+  const trendBtn = latest
+    ? `<button class="mtrend-btn" onclick="event.stopPropagation(); openMeasurementTrendModal('${p.key}')">📈</button>`
+    : '';
+  const goalBtn = `<button class="mtrend-btn" onclick="event.stopPropagation(); openMeasurementGoalModal('${p.key}')">🎯</button>`;
+  const progress = getMeasurementGoalProgress(p.key);
+  const goalBar = progress ? `
+    <div class="mgoal-bar-wrap">
+      <div class="mgoal-bar"><div class="mgoal-bar-fill" style="width:${progress.pct}%;"></div></div>
+      <span class="mgoal-label">${progress.current == null ? `log to start · goal ${fmtMeasure1(progress.goal)}cm` : progress.done ? `🎉 goal reached (${fmtMeasure1(progress.goal)}cm)` : `${progress.pct}% to ${fmtMeasure1(progress.goal)}cm`}</span>
+    </div>` : '';
+  const change60 = getMeasurement60DayChange(p.key);
+  const change60Html = change60
+    ? `<div class="m60-change">${change60.pctText} vs ${change60.days}d ago</div>` : '';
+  return `<div class="measure-row-wrap">
+    <div class="measure-row" onclick="openMeasurementPartModal('${p.key}')">
+      <span class="mlabel">${p.label}</span>
+      <span class="mval-wrap">
+        <span class="mval ${latest ? '' : 'empty'}">${latest ? fmtMeasure1(latest.value) + ' cm' : '—'}</span>
+        ${delta}${trendBtn}${goalBtn}
+      </span>
+    </div>
+    ${change60Html}
+    ${goalBar}
+  </div>`;
+}
 function measurementsGridHtml() {
-  return `<div class="measure-grid">${MEASUREMENT_PARTS.map(p => {
-    const latest = getLatestMeasurementValue(p.key);
-    const trend = latest ? getMeasurementTrend(p.key) : null;
-    const delta = trend && trend.change != null
-      ? `<span class="mdelta">${trend.change > 0 ? '▲' : trend.change < 0 ? '▼' : '–'}${Math.abs(trend.change)}</span>`
-      : '';
-    const trendBtn = latest
-      ? `<button class="mtrend-btn" onclick="event.stopPropagation(); openMeasurementTrendModal('${p.key}')">📈</button>`
-      : '';
-    const goalBtn = `<button class="mtrend-btn" onclick="event.stopPropagation(); openMeasurementGoalModal('${p.key}')">🎯</button>`;
-    const progress = getMeasurementGoalProgress(p.key);
-    const goalBar = progress ? `
-      <div class="mgoal-bar-wrap">
-        <div class="mgoal-bar"><div class="mgoal-bar-fill" style="width:${progress.pct}%;"></div></div>
-        <span class="mgoal-label">${progress.current == null ? `log to start · goal ${fmtMeasure1(progress.goal)}cm` : progress.done ? `🎉 goal reached (${fmtMeasure1(progress.goal)}cm)` : `${progress.pct}% to ${fmtMeasure1(progress.goal)}cm`}</span>
-      </div>` : '';
-    return `<div class="measure-row-wrap">
-      <div class="measure-row" onclick="openMeasurementPartModal('${p.key}')">
-        <span class="mlabel">${p.label}</span>
-        <span class="mval-wrap">
-          <span class="mval ${latest ? '' : 'empty'}">${latest ? fmtMeasure1(latest.value) + ' cm' : '—'}</span>
-          ${delta}${trendBtn}${goalBtn}
-        </span>
-      </div>
-      ${goalBar}
-    </div>`;
-  }).join('')}</div>`;
+  const singles = MEASUREMENT_PARTS.filter(p => MEASUREMENT_SINGLE_KEYS.includes(p.key));
+  const singlesHtml = `<div class="measure-grid">${singles.map(measurementRowHtml).join('')}</div>`;
+  // Each right/left pair gets its own 2-column grid strip — guarantees
+  // right-then-left, side by side, regardless of how many rows came before.
+  const pairsHtml = MEASUREMENT_LR_PAIRS.map(([rKey, lKey]) => {
+    const rP = MEASUREMENT_PARTS.find(p => p.key === rKey);
+    const lP = MEASUREMENT_PARTS.find(p => p.key === lKey);
+    return `<div class="measure-grid" style="margin-top:6px;">${measurementRowHtml(rP)}${measurementRowHtml(lP)}</div>`;
+  }).join('');
+  return singlesHtml + pairsHtml;
 }
 function openMeasurementTrendModal(partKey) {
   const part = MEASUREMENT_PARTS.find(p => p.key === partKey);
@@ -5887,11 +6066,20 @@ function renderProgress() {
                 <div id="bodyweightLogList" style="display:${bodyweightLogListOpen ? 'block' : 'none'};">${recentRows}</div>`;
             })();
         const bf = getBodyFatEstimate();
+        const bmi = getBmiEstimate();
         const height = getUserHeightCm();
         const heightRow = `<div class="measure-row" style="margin-top:6px; cursor:pointer;" onclick="openHeightModal()">
              <span class="mlabel">📏 Height</span>
              <span class="mval-wrap"><span class="mval ${height ? '' : 'empty'}">${height ? fmtMeasure1(height) + ' cm' : 'Add height'}</span></span>
            </div>`;
+        const bmiSection = bmi
+          ? `<div class="meta" style="margin-top:8px; cursor:pointer;" onclick="openBmiTrendModal()">
+               📊 BMI: <strong>${bmi.value}</strong> <span style="color:var(--text-faint);">(${bmi.category}, as of ${new Date(bmi.asOf).toLocaleDateString()})</span>
+               · <span style="text-decoration:underline;">view trend</span>
+             </div>`
+          : `<div class="meta" style="margin-top:8px;">
+               📊 BMI: ${!height ? 'set your height above and log a bodyweight entry to see this' : 'log a bodyweight entry to see this'}
+             </div>`;
         const bfSection = bf
           ? `<div class="meta" style="margin-top:8px; cursor:pointer;" onclick="openBodyFatTrendModal()">
                📉 Body Fat (Navy method): <strong>${bf.pct}%</strong>
@@ -5913,7 +6101,7 @@ function renderProgress() {
             </div>`).join('')}</div>` : '';
         const ms = getMeasurementsStats();
         const msSection = !ms
-          ? `${heightRow}<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, hips, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
+          ? `${heightRow}${bmiSection}<div class="empty" style="padding:10px 0;">Tap "+ Measure" to measure yourself against a body diagram — neck, shoulders, chest/lats, waist, hips, arms, forearms, wrists, thighs, calves (left/right tracked individually).</div>`
           : (() => {
               const log = getMeasurementsLog();
               const historyRows = log.slice().reverse().slice(0, 8).flatMap(e =>
@@ -5927,6 +6115,7 @@ function renderProgress() {
               ).join('');
               return `<div class="meta" style="margin-top:6px;">📐 ${ms.loggedCount} of ${ms.totalCount} measurements tracked${ms.mostRecentDate ? ` · last logged ${new Date(ms.mostRecentDate).toLocaleDateString()}` : ''}</div>
                 ${heightRow}
+                ${bmiSection}
                 ${bfSection}
                 ${measurementsGridHtml()}
                 ${symmetrySection}
