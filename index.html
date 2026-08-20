@@ -359,6 +359,7 @@
   .nav {
     position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--surface);
     border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom, 0);
+    z-index: 30; /* must stay above absolutely-positioned in-card content (e.g. diagram-thumb-box, z-index:1) that can scroll underneath it */
   }
   .navbtn {
     flex: 1; padding: 12px 0 10px; text-align: center; font-size: 11.5px; font-weight: 600;
@@ -401,16 +402,20 @@
   .livectrl { display: flex; align-items: center; gap: 6px; }
   .livectrl-label { font-size: 11px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
   .livectrl-val { font-size: 14px; font-weight: 700; min-width: 44px; text-align: center; color: var(--text); }
-  .sets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .sets { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 8px; }
   /* Timed exercises (Abs etc.) show a 5th control — the ▶ hold-timer button —
      alongside -/value/+/Done. That doesn't fit in a 2-column tile's ~150px
      width without spilling into the neighboring tile, so those get their own
      full-width row instead of sharing a row with another set. */
-  .sets.sets-timed { grid-template-columns: 1fr; }
+  .sets.sets-timed { grid-template-columns: minmax(0,1fr); }
   .setbox {
-    min-width: 156px; height: 56px; border-radius: 13px; background: var(--surface-raised);
+    min-width: 0; height: 56px; border-radius: 13px; background: var(--surface-raised);
     display: flex; align-items: center; justify-content: space-between; padding: 0 4px;
     border: 1.5px solid var(--border-strong); gap: 2px; transition: border-color .25s ease, background .25s ease;
+    overflow: hidden; /* hard guarantee: whatever's inside (long 3-digit values, etc.) can never spill
+                          into a neighboring setbox or row — grid tracks above are also capped at the
+                          available width (minmax(0,1fr)) rather than growing to fit content, so this
+                          should never actually need to clip anything in practice, just backstops it */
   }
   .setbox.done { background: var(--success-bg); border-color: var(--success-border); }
   .stepbtn {
