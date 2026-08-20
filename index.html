@@ -187,6 +187,7 @@
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--bg); color: var(--text); padding-bottom: 92px;
+    transition: padding-bottom .2s ease;
     font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
     /* Every render() does a full #app.innerHTML replacement (every card node
@@ -419,19 +420,19 @@
   }
   .setbox.done { background: var(--success-bg); border-color: var(--success-border); }
   .stepbtn {
-    width: 40px; height: 46px; border-radius: 9px; background: var(--control-bg); color: var(--text);
+    width: 34px; height: 46px; border-radius: 9px; background: var(--control-bg); color: var(--text);
     border: none; font-size: 20px; line-height: 1; flex: 0 0 auto; font-weight: 500;
     transition: transform .1s ease, background .15s ease;
   }
   .stepbtn:active { transform: scale(.9); background: var(--control-bg-active); }
   .setval {
     flex: 1; text-align: center; font-size: 18px; font-weight: 700; color: var(--text);
-    min-width: 26px; letter-spacing: -0.01em;
+    min-width: 20px; letter-spacing: -0.01em;
   }
   .donebtn {
-    height: 46px; padding: 0 12px; border-radius: 9px; background: var(--done-bg); color: #fff;
-    border: none; font-size: 12.5px; font-weight: 700; flex: 0 0 auto; letter-spacing: -0.01em;
-    transition: transform .1s ease, background .15s ease;
+    height: 46px; padding: 0 8px; border-radius: 9px; background: var(--done-bg); color: #fff;
+    border: none; font-size: 11.5px; font-weight: 700; flex: 0 0 auto; letter-spacing: -0.02em;
+    white-space: nowrap; transition: transform .1s ease, background .15s ease;
   }
   .donebtn:active { transform: scale(.93); }
   .setbox.done .donebtn { background: var(--success); color: #06120c; }
@@ -450,6 +451,11 @@
   .btn.secondary { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border-strong); }
   .btn.small { padding: 7px 11px; font-size: 12px; }
   .row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  /* While a rest/hold timer is running, the fixed FAB + its extend/cancel/stop
+     buttons occupy a band roughly 90-250px above the bottom of the screen.
+     Without this, whatever card happens to be scrolled into that band gets
+     covered — this pushes page content up so nothing ever lands underneath. */
+  body.timer-active { padding-bottom: 270px; }
   .timer-fab {
     position: fixed; right: 16px; bottom: 100px; width: 92px; height: 92px; border-radius: 46px;
     background: linear-gradient(155deg, #ff8058, #ff5f4a);
@@ -3335,6 +3341,7 @@ function startRestTimer(seconds) {
   const fab = document.getElementById('timerFab');
   fab.style.display = 'flex';
   fab.classList.remove('urgent');
+  document.body.classList.add('timer-active');
   applyTimerModeClass();
   updateFab();
   showExtendBtn();
@@ -3360,6 +3367,7 @@ function startHoldTimer(exId, setIdx) {
   const fab = document.getElementById('timerFab');
   fab.style.display = 'flex';
   fab.classList.remove('urgent');
+  document.body.classList.add('timer-active');
   applyTimerModeClass();
   updateFab();
   showExtendBtn();
@@ -3382,6 +3390,7 @@ function tickTimer() {
     timerInterval = null;
     fab.style.display = 'none';
     fab.classList.remove('urgent');
+    document.body.classList.remove('timer-active');
     hideExtendBtn();
     syncWorkoutWakeLock(); // NOT a blind release — the workout session itself may still be in progress
     finalAlarm();
@@ -3428,6 +3437,7 @@ function stopHoldTimer() {
   const fab = document.getElementById('timerFab');
   fab.style.display = 'none';
   fab.classList.remove('urgent');
+  document.body.classList.remove('timer-active');
   hideExtendBtn();
   syncWorkoutWakeLock();
   const arr = liveSets[exId];
@@ -3489,6 +3499,7 @@ function skipTimer() {
   const fab = document.getElementById('timerFab');
   fab.style.display = 'none';
   fab.classList.remove('urgent');
+  document.body.classList.remove('timer-active');
   applyTimerModeClass();
   hideExtendBtn();
   syncWorkoutWakeLock(); // NOT a blind release — skipping a rest timer doesn't mean the workout is over
