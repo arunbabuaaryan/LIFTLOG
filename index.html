@@ -11,7 +11,7 @@
     if (t && t !== 'dark') document.documentElement.setAttribute('data-theme', t);
   } catch (e) {}
 </script>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LiftLog</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#111827">
@@ -748,7 +748,7 @@
 </head>
 <body>
 
-<header><h1>LiftLog <span id="streakBadge"></span> <button class="gearbtn" onclick="setView('manage')">⚙</button></h1></header>
+<header><h1>LiftLog <span id="streakBadge"></span> <button class="gearbtn" aria-label="Open settings" onclick="setView('manage')">⚙</button></h1></header>
 <div id="testModeBanner" style="display:none;"></div>
 <div id="editDefaultsBanner" style="display:none;"></div>
 
@@ -763,7 +763,7 @@
 <div class="timer-extend-btn" id="timerExtendBtn" style="display:none;" onclick="event.stopPropagation(); extendTimer(15)">+15s</div>
 <div class="timer-stop-btn" id="timerStopBtn" style="display:none;" onclick="event.stopPropagation(); stopHoldTimer()">⏹ Stop &amp; log</div>
 <div class="timer-cancel-btn" id="timerCancelBtn" style="display:none;" onclick="event.stopPropagation(); skipTimer()">✕ Cancel</div>
-<div class="timer-fab" id="timerFab" style="display:none;" onclick="skipTimer()"></div>
+<div class="timer-fab" id="timerFab" role="button" tabindex="0" aria-label="Skip timer" style="display:none;" onclick="skipTimer()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); skipTimer();}"></div>
 
 <script>
 // ---------- DATA ----------
@@ -980,14 +980,14 @@ function collapsibleHeader(cardId, titleHtml, fallback, extraHtml) {
   const expanded = isCardExpanded(cardId, fallback);
   const pinned = isCardDefaultExpanded(cardId, fallback);
   const pin = isEditDefaultsMode()
-    ? `<span class="card-pin ${pinned ? 'pinned' : ''}" onclick="event.stopPropagation(); toggleCardPin('${cardId}', ${fallback})"
+    ? `<span class="card-pin ${pinned ? 'pinned' : ''}" role="button" tabindex="0" aria-label="${pinned ? 'Expanded by default. Tap to make tap-to-expand instead' : 'Tap to make this card expanded by default'}" onclick="event.stopPropagation(); toggleCardPin('${cardId}', ${fallback})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); event.stopPropagation(); toggleCardPin('${cardId}', ${fallback});}"
         title="${pinned ? 'Expanded by default — tap to make it tap-to-expand instead' : 'Tap to expand — tap this pin to make it expanded by default'}">📌</span>`
     : '';
   return `<div class="row card-toggle-header" onclick="toggleCardRuntime('${cardId}', ${fallback})">
     <h3 style="margin:0; flex:1;">${titleHtml}</h3>
     ${extraHtml || ''}
     ${pin}
-    <span class="card-chevron">${expanded ? '▾' : '▸'}</span>
+    <span class="card-chevron" aria-hidden="true">${expanded ? '▾' : '▸'}</span>
   </div>`;
 }
 
@@ -1054,10 +1054,26 @@ function setAutoBackupOnComplete(on) {
   render();
 }
 
+// The workout data store (exercises/history/prs) lives in localStorage as a
+// single JSON blob with no size cap of its own — the browser's ~5MB-per-
+// origin localStorage quota is the only ceiling, and years of history is
+// exactly the kind of data that grows toward it unnoticed. Rather than only
+// finding out when a save silently fails (see the catch block below), warn
+// proactively well before that point.
+const STORAGE_WARN_CHARS = 4 * 1024 * 1024; // ~4MB of JSON text — warn before the ~5MB browser ceiling
+let storageWarningShown = false;
+function checkStorageQuota(jsonLength) {
+  if (storageWarningShown || jsonLength <= STORAGE_WARN_CHARS) return;
+  storageWarningShown = true;
+  const mb = (jsonLength / (1024 * 1024)).toFixed(1);
+  showAppBanner('storageWarningBanner', '#7a5a1f',
+    `⚠️ Your workout data is using ~${mb}MB of a ~5MB on-device limit. Export a backup soon (Manage → Backup) — new saves may start failing once this fills up.`);
+}
 function loadState() {
   try {
     const raw = localStorage.getItem(activeStoreKey());
     if (!raw) return { exercises: {}, history: [], version: SCHEMA_VERSION }; // brand-new install — nothing to migrate
+    checkStorageQuota(raw.length); // catches an already-large store on startup, not just future saves
     const loaded = JSON.parse(raw) || { exercises: {}, history: [] };
     if (!loaded.version) loaded.version = 1; // existing data that predates the migrations system — oldest known shape
     return loaded;
@@ -1066,7 +1082,9 @@ function loadState() {
 }
 function saveState() {
   try {
-    localStorage.setItem(activeStoreKey(), JSON.stringify(state));
+    const json = JSON.stringify(state);
+    localStorage.setItem(activeStoreKey(), json);
+    checkStorageQuota(json.length);
   } catch (e) {
     // Most likely a full storage quota. Silently failing here would mean a
     // "Finish Exercise" tap looks like it worked but never actually persists.
@@ -3919,17 +3937,17 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
     const isChanged = recentlyChangedSet && recentlyChangedSet.exId === ex.id && recentlyChangedSet.setIdx === i;
     const isHolding = timerKind === 'hold' && holdExId === ex.id && holdSetIdx === i;
     const holdBtn = ex.mode === 'timed' && !set.doneMark
-      ? `<button class="stepbtn holdbtn" onclick="startHoldTimer('${ex.id}', ${i})" title="Start ${set.value}s hold timer">${isHolding ? '⏱' : '▶'}</button>`
+      ? `<button class="stepbtn holdbtn" aria-label="Start ${set.value} second hold timer" onclick="startHoldTimer('${ex.id}', ${i})" title="Start ${set.value}s hold timer">${isHolding ? '⏱' : '▶'}</button>`
       : '';
     return `<div class="setbox ${set.doneMark?'done':''} ${isChanged?'changed':''}">
-      <button class="stepbtn"
+      <button class="stepbtn" aria-label="Decrease rep ${i+1}"
         onpointerdown="startHoldZero('${ex.id}', ${i})"
         onpointerup="endHoldZero('${ex.id}', ${i}, -${step})"
         onpointerleave="cancelHoldZero()"
         onpointercancel="cancelHoldZero()">−</button>
       <span class="setval" onclick="typeSet('${ex.id}', ${i})">${set.value}</span>
-      <button class="stepbtn" onclick="adjustSet('${ex.id}', ${i}, ${step})">+</button>
-      <button class="donebtn" onclick="markSetDone('${ex.id}', ${i})">${set.doneMark?'✓':'Done'}</button>
+      <button class="stepbtn" aria-label="Increase rep ${i+1}" onclick="adjustSet('${ex.id}', ${i}, ${step})">+</button>
+      <button class="donebtn" aria-label="${set.doneMark ? 'Set '+(i+1)+' done' : 'Mark set '+(i+1)+' done'}" onclick="markSetDone('${ex.id}', ${i})">${set.doneMark?'✓':'Done'}</button>
       ${holdBtn}
     </div>`;
   }).join('');
@@ -3940,16 +3958,16 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
   const weightControl = exMode.hasWeightControl
     ? `<div class="livectrl">
         <span class="livectrl-label">Weight</span>
-        <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', -1)">−</button>
+        <button class="stepbtn" aria-label="Decrease weight" onclick="adjustWeightLive('${ex.id}', -1)">−</button>
         <span class="livectrl-val" onclick="editWeightLive('${ex.id}')" style="cursor:pointer; text-decoration:underline dotted; text-underline-offset:3px;" title="Tap to type an exact weight">${exMode.weightLabel(ex, s)}</span>
-        <button class="stepbtn" onclick="adjustWeightLive('${ex.id}', 1)">+</button>
+        <button class="stepbtn" aria-label="Increase weight" onclick="adjustWeightLive('${ex.id}', 1)">+</button>
       </div>` : '';
 
   const setsControl = `<div class="livectrl">
         <span class="livectrl-label">Sets</span>
-        <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', -1)">−</button>
+        <button class="stepbtn" aria-label="Decrease number of sets" onclick="adjustSetsLive('${ex.id}', -1)">−</button>
         <span class="livectrl-val">${exMode.usesProgressiveSets ? s.sets : ex.sets}</span>
-        <button class="stepbtn" onclick="adjustSetsLive('${ex.id}', 1)">+</button>
+        <button class="stepbtn" aria-label="Increase number of sets" onclick="adjustSetsLive('${ex.id}', 1)">+</button>
       </div>`;
 
   const ssColor = ex.supersetGroup ? getSupersetColor(day, ex.supersetGroup) : null;
@@ -8153,8 +8171,35 @@ window.addEventListener('beforeunload', (e) => {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(()=>{});
+    navigator.serviceWorker.register('sw.js').catch((err) => {
+      // Previously silently swallowed — a failed registration meant offline
+      // mode just quietly didn't work, with no way for the user to know why
+      // the app broke the next time they lost signal. Surface it instead.
+      console.error('Service worker registration failed:', err);
+      showServiceWorkerWarning();
+    });
   });
+}
+// Small dismissible banner, not a blocking alert. Multiple warnings (SW +
+// storage) stack in one fixed container instead of overlapping each other.
+function showAppBanner(id, bgColor, message) {
+  if (document.getElementById(id)) return;
+  let container = document.getElementById('appBannerStack');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'appBannerStack';
+    container.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;display:flex;flex-direction:column;';
+    document.body.prepend(container);
+  }
+  const el = document.createElement('div');
+  el.id = id;
+  el.setAttribute('role', 'alert');
+  el.style.cssText = `background:${bgColor};color:#fff;padding:10px 14px;font-size:12.5px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 2px 10px rgba(0,0,0,.3);`;
+  el.innerHTML = `<span>${message}</span><button aria-label="Dismiss" style="background:transparent;border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:6px;padding:4px 10px;font-size:12px;flex:0 0 auto;" onclick="this.parentElement.remove()">Dismiss</button>`;
+  container.appendChild(el);
+}
+function showServiceWorkerWarning() {
+  showAppBanner('swWarningBanner', '#7a1f1f', "⚠️ Offline mode couldn't start — LiftLog may not work without a connection until this is fixed. Try reloading.");
 }
 </script>
 </body>
