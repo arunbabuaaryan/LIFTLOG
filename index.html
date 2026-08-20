@@ -2351,11 +2351,16 @@ function showUndoToast(message) {
 
 function undoFinishExercise() {
   if (!lastFinishUndo) return;
-  const { exId, prevExState, arr, pushedEntry, prEntry } = lastFinishUndo;
+  const { exId, prevExState, arr, pushedEntry, prEntry, replacedSkipEntry } = lastFinishUndo;
   // Remove the exact history entry that was pushed (by reference, so it's precise
   // even if other entries were added since — e.g. syncing doesn't touch this array).
   const histIdx = state.history.indexOf(pushedEntry);
   if (histIdx > -1) state.history.splice(histIdx, 1);
+  // If this log had replaced an earlier skip entry for the same session,
+  // put that skip entry back rather than leaving today with no record at
+  // all — undo should return to exactly the state before this Finish, and
+  // that included the skip.
+  if (replacedSkipEntry) state.history.splice(histIdx > -1 ? histIdx : state.history.length, 0, replacedSkipEntry);
   if (prEntry && state.prs) state.prs = state.prs.filter(p => p !== prEntry);
   if (state.exercises) state.exercises[exId] = prevExState;
   liveSets[exId] = arr; // bring the tapped-in values back so nothing is lost
@@ -3086,13 +3091,27 @@ function finishExerciseConfirmed(ex) {
     skipped: hasSkippedSet,
     isPR
   };
+  // If this exercise already has an entry for today's session and that
+  // entry was itself a skip, this log supersedes it rather than stacking a
+  // second entry — a skip is a placeholder, not a real session, so "going
+  // back and actually doing it later in the day" should end up with one
+  // clean entry, not a permanent zeroed record sitting alongside the real
+  // one. A redo of an already genuinely-completed (non-skipped) entry still
+  // adds a second entry, unchanged — that's a deliberate correction trail,
+  // see unlockExerciseForRedo().
+  const priorTodayEntry = getTodayLoggedEntry(ex, DAYS[currentDayIdx]);
+  let replacedSkipEntry = null;
+  if (priorTodayEntry && priorTodayEntry.skipped) {
+    const priorIdx = state.history.indexOf(priorTodayEntry);
+    if (priorIdx !== -1) { replacedSkipEntry = priorTodayEntry; state.history.splice(priorIdx, 1); }
+  }
   state.history.push(pushedEntry);
   let prEntry = null;
   if (isPR) {
     prEntry = recordPR(ex.name, sessionBest, mode.unit);
   }
   saveState();
-  lastFinishUndo = { exId: ex.id, exName: ex.name, prevExState: preFinishSnapshot, arr: arrSnapshot, pushedEntry, prEntry };
+  lastFinishUndo = { exId: ex.id, exName: ex.name, prevExState: preFinishSnapshot, arr: arrSnapshot, pushedEntry, prEntry, replacedSkipEntry };
   showUndoToast(`${ex.name}: ${statusMsg}${isPR ? ' 🏆 New PR!' : ''}`);
   delete liveSets[ex.id];
   persistLiveSets(ex.id);
@@ -3855,16 +3874,17 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
   // confirmed step away if a real correction is needed.
   if (doneToday && !redoUnlocked.has(ex.id)) {
     const logged = getTodayLoggedEntry(ex, day);
+    const wasSkipped = !!(logged && logged.skipped);
     const loggedLabel = logged ? formatLoggedEntry(logged) : targetLabel(ex);
     const ssColor = ex.supersetGroup ? getSupersetColor(day, ex.supersetGroup) : null;
     return `<div class="card done-today card-locked" style="border-left:3px solid ${day.color};${ssColor ? ` border-top:3px solid ${ssColor};` : ''}" id="card-${ex.id}">
       ${diagramThumbHtml(ex)}
       ${ssColor ? `<div class="focus-eyebrow" style="color:${ssColor};">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)}</div>` : ''}
       <div class="row">
-        <h3>✅ ${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>
-        <button class="btn small secondary" onclick="unlockExerciseForRedo('${ex.id}')">↻ Redo</button>
+        <h3>${wasSkipped ? '⏭️' : '✅'} ${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>
+        <button class="btn small secondary" onclick="unlockExerciseForRedo('${ex.id}')">${wasSkipped ? '▶ Log it' : '↻ Redo'}</button>
       </div>
-      <div class="meta">Logged: ${escapeHtml(loggedLabel)}</div>
+      <div class="meta">${wasSkipped ? 'Skipped today — nothing logged yet' : `Logged: ${escapeHtml(loggedLabel)}`}</div>
       <div class="meta" style="margin-bottom:0; color:var(--text-faint);">Next: ${escapeHtml(targetLabel(ex))}</div>
     </div>`;
   }
@@ -3911,11 +3931,12 @@ function renderExerciseCard(ex, day, { highlighted = false } = {}) {
 
   const ssColor = ex.supersetGroup ? getSupersetColor(day, ex.supersetGroup) : null;
   const ssPartners = ex.supersetGroup ? getSupersetPartners(ex, day) : [];
+  const todayEntryForBanner = doneToday ? getTodayLoggedEntry(ex, day) : null;
   return `<div class="card ${doneToday?'done-today':''} ${highlighted?'card-focus':''}" style="border-left:3px solid ${day.color};${ssColor ? ` border-top:3px solid ${ssColor};` : ''}" id="card-${ex.id}">
     ${diagramThumbHtml(ex)}
     ${ssColor ? `<div class="focus-eyebrow" style="color:${ssColor};">⚡ Superset ${getSupersetLabel(day, ex.supersetGroup)} — with ${ssPartners.map(p => escapeHtml(p.name)).join(', ')}</div>` : ''}
     ${highlighted ? `<div class="focus-eyebrow">Now training</div>` : ''}
-    ${doneToday ? `<div class="focus-eyebrow" style="color:var(--danger);">Redo unlocked — this will add a second log entry</div>` : ''}
+    ${doneToday ? `<div class="focus-eyebrow" style="color:var(--danger);">${(todayEntryForBanner && todayEntryForBanner.skipped) ? 'Logging this will replace today\'s skipped entry' : 'Redo unlocked — this will add a second log entry'}</div>` : ''}
     <div class="row"><h3>${doneToday?'✅ ':''}${escapeHtml(ex.name)}${isExerciseLinked(ex.id) ? ` <span class="badge linked" title="Also on: ${escapeHtml(getLinkedDayLabel(ex.id, currentDayIdx) || '')}">🔗</span>` : ''}</h3>${badge}</div>
     ${ex.notes ? `<div class="meta" style="font-style:italic;">📝 ${escapeHtml(ex.notes)}</div>` : ''}
     <div class="meta">Target: ${targetLabel(ex)}</div>
@@ -3965,11 +3986,16 @@ function getTodayLoggedEntry(ex, day) {
 
 function unlockExerciseForRedo(exId) {
   const ex = getExerciseById(exId);
+  const day = DAYS[currentDayIdx];
+  const todayEntry = ex ? getTodayLoggedEntry(ex, day) : null;
+  const wasSkipped = !!(todayEntry && todayEntry.skipped);
   showConfirm({
-    title: 'Log this again?',
-    message: `${ex ? ex.name : 'This exercise'} is already logged for today. Doing it again adds a SECOND entry — it'll count twice toward today's volume and duration. Only do this to fix a mistake.`,
-    confirmLabel: 'Unlock to redo',
-    danger: true,
+    title: wasSkipped ? 'Log this now?' : 'Log this again?',
+    message: wasSkipped
+      ? `You skipped ${ex ? ex.name : 'this exercise'} earlier today. Logging it now will replace that skipped entry with your real numbers — it won't create a duplicate.`
+      : `${ex ? ex.name : 'This exercise'} is already logged for today. Doing it again adds a SECOND entry — it'll count twice toward today's volume and duration. Only do this to fix a mistake.`,
+    confirmLabel: wasSkipped ? 'Unlock to log' : 'Unlock to redo',
+    danger: !wasSkipped,
     onConfirm: () => { redoUnlocked.add(exId); renderPreservingScroll(`card-${exId}`); }
   });
 }
@@ -6858,6 +6884,13 @@ function openExerciseEditor(exId, dayIdx) {
     <label style="${lbl}">Time increment per progression/deload (sec)<input type="number" id="editExTimeIncrement" min="1" value="${getTimeIncrement(ex)}"></label>
   `;
 
+  const lastEntry = getLastLoggedEntry(ex);
+  const nextLastHtml = `
+    <div class="meta" style="margin:0; display:flex; flex-direction:column; gap:2px; background:var(--surface-raised); border:1px solid var(--border-strong); border-radius:8px; padding:8px 10px;">
+      <span><strong style="color:var(--text-dim);">Next:</strong> ${escapeHtml(targetLabel(ex))}</span>
+      <span style="color:var(--text-faint);"><strong style="color:var(--text-dim);">Last:</strong> ${lastEntry ? escapeHtml(formatLoggedEntry(lastEntry)) : '—'}</span>
+    </div>`;
+
   const overlay = document.createElement('div');
   overlay.className = 'confirm-overlay';
   overlay.innerHTML = `
@@ -6865,6 +6898,7 @@ function openExerciseEditor(exId, dayIdx) {
       <h3>Edit exercise</h3>
       <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
         <label style="${lbl}">Name<input type="text" id="editExName" value="${escapeHtml(ex.name)}"></label>
+        ${nextLastHtml}
         <div id="diagramEditorSection_${ex.id}">${diagramEditorSectionHtml(ex)}</div>
         ${fieldsHtml}
         <div class="row" style="gap:10px;">
