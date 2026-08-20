@@ -5079,6 +5079,15 @@ function bmiCategory(bmi) {
   if (bmi < 30) return 'Overweight';
   return 'Obese';
 }
+// "12% overweight" / "8% underweight" instead of just the category name —
+// percentage is relative to the nearer edge of the normal BMI range
+// (18.5–24.9). Within that range there's no "over/under" direction, so it
+// just reads "Normal".
+function bmiStatusLabel(bmi) {
+  if (bmi < 18.5) return `${Math.round(((18.5 - bmi) / 18.5) * 100)}% underweight`;
+  if (bmi <= 24.9) return 'Normal';
+  return `${Math.round(((bmi - 24.9) / 24.9) * 100)}% overweight`;
+}
 function getBmiEstimate() {
   const height = getUserHeightCm();
   if (!height) return null;
@@ -5086,7 +5095,7 @@ function getBmiEstimate() {
   if (!log.length) return null;
   const latest = log[log.length - 1];
   const bmi = calcBmi(latest.weight, height);
-  return { value: fmtMeasure1(bmi), category: bmiCategory(bmi), asOf: latest.date };
+  return { value: fmtMeasure1(bmi), category: bmiStatusLabel(bmi), asOf: latest.date };
 }
 // One BMI value per bodyweight log entry, using the height on file — same
 // "recompute the whole series from current height" approach as body fat.
@@ -5111,7 +5120,7 @@ function openBmiTrendModal() {
     const d = prev ? fmtMeasure1(h.value - prev.value) : null;
     const dHtml = d != null ? `<span class="mdelta">${d > 0 ? '▲' : d < 0 ? '▼' : '–'}${Math.abs(d)}</span>` : '';
     return `<div class="histitem row" style="padding:6px 0;">
-      <span class="meta" style="margin:0;">${new Date(h.date).toLocaleDateString()}: <strong>${fmtMeasure1(h.value)}</strong> (${bmiCategory(h.value)})</span>
+      <span class="meta" style="margin:0;">${new Date(h.date).toLocaleDateString()}: <strong>${fmtMeasure1(h.value)}</strong> (${bmiStatusLabel(h.value)})</span>
       ${dHtml}
     </div>`;
   }).join('');
