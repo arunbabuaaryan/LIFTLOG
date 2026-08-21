@@ -1081,6 +1081,48 @@ function loadState() {
   catch(e){ return { exercises:{}, history:[], version: SCHEMA_VERSION }; }
 }
 function saveState() {
+  // Debounced: rapid interactions (holding +/-, fast rep typing, quick set
+  // taps) previously triggered a full JSON.stringify + localStorage write on
+  // every single tap — 55 call sites, no coalescing. This collapses a burst
+  // of changes into one write ~200ms after the last one, and flushes
+  // immediately if the app is backgrounded/closed (see listeners below) so
+  // nothing is ever lost to the delay.
+  //
+  // Also the invalidation signal for the history index below: every
+  // state-mutating path calls saveState(), so bumping a version counter here
+  // is more reliable than watching history.length — undoFinishExercise can
+  // remove one entry and reinsert another in the same call, leaving .length
+  // unchanged while the contents actually changed.
+  historyVersion++;
+  if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+  saveDebounceTimer = setTimeout(flushSaveState, 200);
+}
+let saveDebounceTimer = null;
+let historyVersion = 0;
+// Lazy per-exercise / per-day index over state.history, rebuilt only when
+// historyVersion changes. Several views (predictions, PR checks, day
+// summaries) repeatedly do state.history.filter(h => h.exercise === X) or
+// h.day === X over the *entire* history array — fine for a few hundred
+// entries, but it's an O(n) scan per call with no cap on how large n gets
+// over years of use. This turns those into an O(1) bucket lookup instead.
+// Multi-condition filters (date + day + session together) are left as
+// plain filters — lower-frequency call sites, not worth the complexity.
+let historyIndexCache = null;
+function getHistoryIndex() {
+  if (historyIndexCache && historyIndexCache.version === historyVersion) return historyIndexCache;
+  const byExercise = new Map(), byDay = new Map();
+  for (const h of state.history) {
+    if (h.exercise) { if (!byExercise.has(h.exercise)) byExercise.set(h.exercise, []); byExercise.get(h.exercise).push(h); }
+    if (h.day) { if (!byDay.has(h.day)) byDay.set(h.day, []); byDay.get(h.day).push(h); }
+  }
+  historyIndexCache = { version: historyVersion, byExercise, byDay };
+  return historyIndexCache;
+}
+function historyByExercise(exName) { return getHistoryIndex().byExercise.get(exName) || []; }
+function historyByDay(dayLabel) { return getHistoryIndex().byDay.get(dayLabel) || []; }
+
+function flushSaveState() {
+  saveDebounceTimer = null;
   try {
     const json = JSON.stringify(state);
     localStorage.setItem(activeStoreKey(), json);
@@ -1091,6 +1133,15 @@ function saveState() {
     alert('⚠️ Could not save — your device storage may be full. Your last action may not be saved. Try freeing up space or exporting/clearing old backups.');
   }
 }
+// Debounce buys smoothness on rapid taps, but must never buy data loss: flush
+// synchronously the moment the app is hidden/backgrounded or about to close,
+// since a pending 200ms timer won't fire once the tab or app is suspended.
+function flushPendingSaveIfAny() {
+  if (saveDebounceTimer) { clearTimeout(saveDebounceTimer); flushSaveState(); }
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushPendingSaveIfAny(); });
+window.addEventListener('pagehide', flushPendingSaveIfAny);
+window.addEventListener('beforeunload', flushPendingSaveIfAny);
 let state = loadState();
 
 function enableTestMode() {
@@ -1100,6 +1151,7 @@ function enableTestMode() {
     message: 'This switches to a separate copy of your data (starting from what you have now) so you can try anything — logging sets, editing exercises, resetting data — without touching your real progress. Exit anytime to go back.',
     confirmLabel: 'Enable',
     onConfirm: () => {
+      flushPendingSaveIfAny(); // ensure the seed below reflects the latest in-memory changes, not a stale pre-debounce write
       if (!localStorage.getItem(TEST_STORE_KEY)) {
         // First time entering test mode: seed it with a copy of real data, not a blank slate
         localStorage.setItem(TEST_STORE_KEY, localStorage.getItem(STORE_KEY) || JSON.stringify({ exercises:{}, history:[], prs:[], meta:{}, sessionStarts:{} }));
@@ -1606,6 +1658,57 @@ function showConfirm({ title, message, confirmLabel = 'Confirm', danger = false,
   if (requireText) setTimeout(() => overlay.querySelector('#confirmInputField')?.focus(), 50);
 }
 
+// Generic modal accessibility layer. Every modal in this app (18 call sites)
+// shares the same .confirm-overlay > .confirm-modal structure and the same
+// "click the overlay background to cancel" pattern, so this single observer
+// covers all of them at once instead of editing each call site individually:
+//  - Escape closes the topmost modal, by dispatching a click on the overlay
+//    itself — reusing each modal's own existing cancel logic rather than
+//    guessing what each one's close() should do.
+//  - Focus moves into the modal on open, is trapped there (Tab/Shift+Tab
+//    wraps instead of escaping to the page underneath), and is restored to
+//    whatever triggered the modal once it closes.
+(function setUpModalAccessibility() {
+  function focusablesIn(container) {
+    return Array.from(container.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )).filter(el => !el.disabled && el.offsetParent !== null);
+  }
+  function onOverlayAdded(overlay) {
+    const modal = overlay.querySelector('.confirm-modal');
+    if (!modal) return;
+    const previouslyFocused = document.activeElement;
+    const focusables = focusablesIn(modal);
+    if (focusables.length) focusables[0].focus();
+    else { modal.setAttribute('tabindex', '-1'); modal.focus(); }
+    overlay.addEventListener('keydown', e => {
+      if (e.key !== 'Tab') return;
+      const items = focusablesIn(modal);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    const restoreObserver = new MutationObserver(() => {
+      if (document.body.contains(overlay)) return;
+      restoreObserver.disconnect();
+      if (previouslyFocused && document.body.contains(previouslyFocused)) previouslyFocused.focus?.();
+    });
+    restoreObserver.observe(document.body, { childList: true });
+  }
+  new MutationObserver(mutations => {
+    for (const m of mutations) for (const node of m.addedNodes) {
+      if (node.nodeType === 1 && node.classList?.contains('confirm-overlay')) onOverlayAdded(node);
+    }
+  }).observe(document.body, { childList: true });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const overlays = document.querySelectorAll('.confirm-overlay');
+    if (!overlays.length) return;
+    overlays[overlays.length - 1].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+})();
+
 // Curated set of workout-relevant emoji, plus a free-text fallback so
 // nothing is off-limits — just not everything is one tap away.
 const EMOJI_CHOICES = [
@@ -1844,7 +1947,7 @@ function computeStreak() {
 }
 
 function getHistoricalMax(exName, mode) {
-  const entries = state.history.filter(h => h.exercise === exName);
+  const entries = historyByExercise(exName);
   if (entries.length === 0) return null;
   if (getExerciseMode(mode).usesWeightAsBest) {
     return Math.max(...entries.map(h => h.weight ?? 0));
@@ -1898,7 +2001,7 @@ function getExerciseConsistency(exName) {
   const cadence = getExerciseCadenceDays(exName);
   const cutoff = Date.now() - 60 * 86400000;
   const recentSessions = new Set(
-    state.history.filter(h => h.exercise === exName && !h.skipped && new Date(getEntryDateKey(h)).getTime() >= cutoff)
+    historyByExercise(exName).filter(h => !h.skipped && new Date(getEntryDateKey(h)).getTime() >= cutoff)
       .map(h => getEntryDateKey(h))
   ).size;
   const expected = Math.max(1, Math.round(60 / cadence));
@@ -2051,7 +2154,7 @@ function generatePredictionInsights(ex) {
 // How long ago the current all-time best for this exercise was last hit (not
 // necessarily the first time — the most recent time you touched that ceiling).
 function getDaysSinceLastPR(exName, mode) {
-  const entries = state.history.filter(h => h.exercise === exName && !h.skipped);
+  const entries = historyByExercise(exName).filter(h => !h.skipped);
   if (!entries.length) return null;
   const valueOf = h => getExerciseMode(mode).usesWeightAsBest ? (h.weight ?? 0) : Math.max(...h.sets);
   const best = Math.max(...entries.map(valueOf));
@@ -4187,7 +4290,7 @@ function getDaySessionsWithDuration(dayLabel) {
   const currentHasOverride = getDurationOverride(curAnchor, dayLabel, curSessionNum) != null;
 
   const seen = new Map();
-  state.history.filter(h => h.day === dayLabel).forEach(h => {
+  historyByDay(dayLabel).forEach(h => {
     const dk = getEntryDateKey(h);
     const num = getEntrySessionNum(h);
     const key = dk + '__s' + num;
@@ -5694,7 +5797,7 @@ function getMuscleGroupVolumeStats(dayLabel) {
   const currentIsIncomplete = day ? getTodayCompletionPct(day) < 100 : false;
 
   const seen = new Map();
-  state.history.filter(h => h.day === dayLabel).forEach(h => {
+  historyByDay(dayLabel).forEach(h => {
     const dk = getEntryDateKey(h);
     const num = getEntrySessionNum(h);
     const key = dk + '__s' + num;
@@ -5755,7 +5858,7 @@ function getRecentAvgDuration(dayLabel, n = 3) {
   const currentHasOverride = getDurationOverride(curAnchor, dayLabel, curSessionNum) != null;
 
   const seen = new Map();
-  state.history.filter(h => h.day === dayLabel).forEach(h => {
+  historyByDay(dayLabel).forEach(h => {
     const dk = getEntryDateKey(h);
     const num = getEntrySessionNum(h);
     const key = dk + '__s' + num;
@@ -5841,7 +5944,7 @@ function getRecoveryStatus(dayLabel) {
 // a single "how on-pace am I overall" percentage for the header.
 function getOverallConsistencyPct() {
   const allEx = DAYS.flatMap(d => d.exercises);
-  const measurable = allEx.filter(ex => state.history.filter(h => h.exercise === ex.name && !h.skipped).length >= 2);
+  const measurable = allEx.filter(ex => historyByExercise(ex.name).filter(h => !h.skipped).length >= 2);
   if (!measurable.length) return null;
   const avg = measurable.reduce((sum, ex) => sum + getExerciseConsistency(ex.name), 0) / measurable.length;
   return Math.round(avg * 100);
