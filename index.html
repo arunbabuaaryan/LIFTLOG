@@ -849,7 +849,7 @@ function updateEditDefaultsBanner() {
 // The current shape of saved state. Bump this by 1 and add a matching entry
 // to MIGRATIONS below whenever a future change needs to transform old saved
 // data (or the DAYS config layered on top of it) into a new shape.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // Each entry runs exactly once, the first time a state older than its
 // version is loaded — never on every load. They run in ascending order, and
@@ -902,6 +902,36 @@ const MIGRATIONS = [
           delete live.tier;
         }
       }));
+    }
+  },
+  {
+    version: 4,
+    description: 'Streak tracking used to read straight from state.history — but switching workout plans (Start New Plan / Switch to Plan) wholesale-swaps state.history to a different plan\'s bucket, which silently reset the streak every time. Backfills a plan-independent streakLog (and a plan-independent longest-streak) from every history entry this device knows about — the live plan plus every archived one — so existing streaks survive this fix rather than dropping to zero the moment it ships.',
+    migrate(state, days) {
+      const seen = new Set();
+      state.streakLog = [];
+      const ingest = (history) => {
+        (history || []).forEach(h => {
+          const date = h.sessionDate || (h.date ? h.date.slice(0, 10) : null);
+          if (!date || !h.day) return;
+          const key = `${date}::${h.day}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          state.streakLog.push({ date, day: h.day });
+        });
+      };
+      ingest(state.history);
+      Object.values(state.plans || {}).forEach(p => ingest(p.history));
+      // Best-effort floor, not a full historical recomputation (that would
+      // mean re-deriving every past week's streak run across every plan) —
+      // takes whichever plan (live or archived) had the highest recorded
+      // longest-streak as a starting point, so this can only go up from a
+      // real number rather than silently dropping to 0.
+      const candidates = [
+        (state.meta && state.meta.longestStreak) || 0,
+        ...Object.values(state.plans || {}).map(p => p.longestStreak || 0)
+      ];
+      state.globalLongestStreak = Math.max(0, ...candidates);
     }
   },
 ];
@@ -1287,7 +1317,9 @@ function startNewPlan() {
       state.durationOverrides = {};
       state.sessionStarts = {};
       state.meta = state.meta || {};
-      state.meta.longestStreak = 0;
+      // NOT state.globalLongestStreak — that's plan-independent by design
+      // (same reasoning as state.streakLog below), so a new plan doesn't
+      // erase your all-time best.
       delete state.liveSets;
 
       hydrateDaysFromState();
@@ -1318,7 +1350,8 @@ function switchToPlan(planId) {
       state.durationOverrides = target.durationOverrides || {};
       state.sessionStarts = target.sessionStarts || {};
       state.meta = state.meta || {};
-      state.meta.longestStreak = target.longestStreak || 0;
+      // NOT state.globalLongestStreak — plan-independent by design, so
+      // switching plans doesn't swap your all-time best out either.
       delete state.plans[planId]; // now live, not archived
       delete state.liveSets;
 
@@ -1918,15 +1951,20 @@ const WEEKLY_MIN_GROUPS = 3;
 // calendar days you happened to train on. Doing two different groups back to
 // back on one day counts as 2 here, same as doing them on two separate days
 // would; doing the same group twice in one day (an extra session) still only
-// counts once, since it's still just one muscle group worked that day. Uses
-// each entry's session-anchored date (getEntryDateKey), same as the dedup
-// key below, so a late-night workout that spans midnight is bucketed into
-// the week it started rather than the one its raw timestamp happens to fall in.
+// counts once, since it's still just one muscle group worked that day.
+//
+// Reads from state.streakLog, NOT state.history — history gets wholesale-
+// swapped out when switching between workout plans (each plan has its own
+// separate history bucket), which would silently reset the streak every
+// time you changed programs. streakLog is a small, plan-independent log
+// that's appended to (never swapped) regardless of which plan is active —
+// see the append next to state.history.push() in finishExerciseConfirmed,
+// and the v4 migration that backfills it for existing users.
 function getWeekWorkoutGroupCount(weekKey) {
   const groupsInWeek = new Set(
-    state.history
-      .filter(h => getWeekKey(getEntryDateKey(h)) === weekKey)
-      .map(h => `${getEntryDateKey(h)}::${h.day}`)
+    (state.streakLog || [])
+      .filter(g => getWeekKey(g.date) === weekKey)
+      .map(g => `${g.date}::${g.day}`)
   );
   return groupsInWeek.size;
 }
@@ -3251,6 +3289,13 @@ function finishExerciseConfirmed(ex) {
     if (priorIdx !== -1) { replacedSkipEntry = priorTodayEntry; state.history.splice(priorIdx, 1); }
   }
   state.history.push(pushedEntry);
+  // Plan-independent streak tracking — see getWeekWorkoutGroupCount for why
+  // this can't just read state.history. Appended (deduped), never swapped.
+  state.streakLog = state.streakLog || [];
+  const streakKey = `${pushedEntry.sessionDate}::${pushedEntry.day}`;
+  if (!state.streakLog.some(g => `${g.date}::${g.day}` === streakKey)) {
+    state.streakLog.push({ date: pushedEntry.sessionDate, day: pushedEntry.day });
+  }
   const startedRedoAt = redoStartTimes[ex.id];
   delete redoStartTimes[ex.id];
   if (replacedSkipEntry && !hasSkippedSet) {
@@ -3318,10 +3363,13 @@ function finishExerciseConfirmed(ex) {
 // the compare-and-store; the modal uses its return value to decide whether
 // to show "new best!".
 function checkAndUpdateLongestStreak(streak) {
-  state.meta = state.meta || {};
-  const prevBest = state.meta.longestStreak || 0;
+  // Deliberately state.globalLongestStreak, not state.meta.longestStreak —
+  // state.meta gets wholesale-swapped by switchToPlan/startNewPlan same as
+  // state.history did, which would let a plan switch silently reset your
+  // personal-best streak too. See the v4 migration and getWeekWorkoutGroupCount.
+  const prevBest = state.globalLongestStreak || 0;
   const isNewBest = streak > 0 && streak > prevBest;
-  if (isNewBest) { state.meta.longestStreak = streak; saveState(); }
+  if (isNewBest) { state.globalLongestStreak = streak; saveState(); }
   return isNewBest;
 }
 // Keeps meta.longestStreak from silently falling behind the real current
@@ -4236,7 +4284,16 @@ function renderWorkout() {
     const streak = computeStreak();
     checkAndUpdateLongestStreak(streak);
     const thisWeek = getWeekWorkoutGroupCount(getWeekKey(new Date()));
-    const weekPart = `${thisWeek}/${DAYS.length} muscle groups this week`;
+    // Deliberately WEEKLY_MIN_GROUPS (3), not DAYS.length: the streak itself
+    // (computeStreak) has always only required 3 distinct day-sessions per
+    // week, regardless of the active plan — it reads purely from
+    // state.history, so switching plans (a 5-day split down to a 2-day
+    // split, etc.) never resets or changes it. But this label used to show
+    // "X/DAYS.length", which made a 5-day plan look like it required 5
+    // sessions/week to keep the streak, and would've shown a confusing "X/2"
+    // cap on a 2-day plan even though 3 sessions/week is still the real
+    // requirement (e.g. one of the two day-types done twice in the week).
+    const weekPart = `${Math.min(thisWeek, WEEKLY_MIN_GROUPS)}/${WEEKLY_MIN_GROUPS} sessions this week`;
     streakEl.textContent = streak > 0 ? `🔥 ${streak} week streak · ${weekPart}` : weekPart;
   }
 
